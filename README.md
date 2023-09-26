@@ -1,48 +1,24 @@
 # sipgox
 
-is experiment area to add extra functionality on top [sipgo lib](https://github.com/emiago/sipgo)
+is experimental/extra area to add more functionality on top [sipgo lib](https://github.com/emiago/sipgo)
 
-If use it in your projects consider that this repo will not have stable code for now.
+If use it in your projects consider that this repo for now will not have stable code.
 
 If you find useful, support this, open issue etc...
-## Phone
 
-Lib provides a simple phone (UA) building
-```go 
 
-phone := sipgox.NewPhone(ua,
-    sipgox.WithPhoneListenAddr(udpAddr),
-)
-
-// Phone register
-phone.Register(*username, *password, *dst)
-
-// Dial destination
-phone.Dial(recipient)
-```
-
-TODO:
-- [x] Simple register and dial
-- [x] Media receiving
-- [ ] Answering
-- [ ] Playback Media (probably through custom media)
-- [ ] Hangup
+Features:
+- [x] Simple dial answer register
+- [x] Dialog setup and small SDP 
+- [x] RTP/RTCP receiving and logging
+- [x] Playback Media on default device
+- [x] Input Media on default device
+- [x] Hangup
 - [ ] Timeouts
 - [ ] SDP codec fields manipulating
 - [ ] SDP negotiation fail
-- [ ] Customizing media handling for Dial, hooks...
+- [ ] DTMF passing
+- [ ] Playback ringtone
+- [ ] Recording
 
 
-
-## Media
-
-Creating media handling
-
-TODO:  
-- [x] Custom RTP/RTCP handling
-- [ ] RTP/RTCP parsing
-- [ ] Passing DTMF
-
-## Bridge (TODO)
-
-B2Bua bridging
