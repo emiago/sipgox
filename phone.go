@@ -93,27 +93,26 @@ func (p *Phone) Close() {
 	p.s.Close()
 }
 
-func (p *Phone) getInterfaceAddr(network string, targetAddr string) string {
+func (p *Phone) getInterfaceAddr(network string, targetAddr string) (addr string, err error) {
+	host, port, err := p.getInterfaceHostPort(network, targetAddr)
+	if err != nil {
+		return "", err
+	}
+	return net.JoinHostPort(host, strconv.Itoa(port)), nil
+}
+
+func (p *Phone) getInterfaceHostPort(network string, targetAddr string) (ipstr string, port int, err error) {
 	for _, a := range p.listenAddrs {
 		if a.Network == network {
-			return a.Addr
+			return sip.ParseAddr(a.Addr)
 		}
 	}
 
 	// Go with random
-	port := rand.Intn(9999) + 50000
-
-	if targetAddr != "" {
-		// TODO in case we are on multi private networks
-	}
+	port = rand.Intn(9999) + 50000
 
 	ip, err := sip.ResolveSelfIP()
-	if err == nil {
-		return net.JoinHostPort(ip.String(), strconv.Itoa(port))
-	}
-
-	return net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
-
+	return ip.String(), port, err
 }
 
 func (p *Phone) createServerListener(a ListenAddr) (*Listener, error) {
@@ -180,7 +179,7 @@ func (p *Phone) createServerListeners() (listeners []*Listener, e error) {
 	}
 
 	if len(p.listenAddrs) == 0 {
-		addr := p.getInterfaceAddr("udp", "")
+		addr, _ := p.getInterfaceAddr("udp", "")
 		err := newListener(ListenAddr{Network: "udp", Addr: addr})
 		return listeners, err
 	}
@@ -204,7 +203,9 @@ var (
 func (p *Phone) Register(recipient sip.Uri) error {
 	// Make our client reuse address
 	network := recipient.Headers["transport"]
-	addr := p.getInterfaceAddr(network, recipient.HostPort())
+	host, port, _ := p.getInterfaceHostPort(network, recipient.HostPort())
+	addr := net.JoinHostPort(host, strconv.Itoa(port))
+
 	client, err := sipgo.NewClient(p.s.UserAgent,
 		sipgo.WithClientAddr(addr),
 	)
@@ -222,54 +223,34 @@ func (p *Phone) Register(recipient sip.Uri) error {
 
 	req := sip.NewRequest(sip.REGISTER, &recipient)
 	req.AppendHeader(
-		sip.NewHeader("Contact", fmt.Sprintf("<sip:%s@%s>", username, p.ua.GetIP().String())),
+		sip.NewHeader("Contact", fmt.Sprintf("<sip:%s@%s>", username, host)),
 	)
 
 	// Send request and parse response
 	// req.SetDestination(*dst)
+	ctx := context.Background()
 	tx, err := client.TransactionRequest(req.Clone())
 	if err != nil {
 		return fmt.Errorf("fail to create transaction req=%q: %w", req.StartLine(), err)
 	}
 	defer tx.Terminate()
 
-	res, err := getResponse(tx)
+	res, err := getResponse(ctx, tx)
 	if err != nil {
 		return fmt.Errorf("fail to get response req=%q : %w", req.StartLine(), err)
 	}
 
 	p.log.Info().Int("status", int(res.StatusCode)).Msg("Received status")
-	if res.StatusCode == 401 {
-		// Get WwW-Authenticate
-		wwwAuth := res.GetHeader("WWW-Authenticate")
-		chal, err := digest.ParseChallenge(wwwAuth.Value())
+	if res.StatusCode == sip.StatusUnauthorized {
+		tx.Terminate() //Terminate previous
+		tx, err = digestTransactionRequest(client, username, password, req, res)
 		if err != nil {
-			return fmt.Errorf("fail to parse chalenge wwwauth=%q: %w", wwwAuth.Value(), err)
+			return err
 		}
 
-		// Reply with digest
-		cred, err := digest.Digest(chal, digest.Options{
-			Method:   req.Method.String(),
-			URI:      recipient.Host,
-			Username: username,
-			Password: password,
-		})
+		res, err = getResponse(ctx, tx)
 		if err != nil {
-			return fmt.Errorf("fail to build digest: %w", err)
-		}
-
-		newReq := req.Clone()
-		newReq.AppendHeader(sip.NewHeader("Authorization", cred.String()))
-
-		tx, err = client.TransactionRequest(newReq)
-		if err != nil {
-			return fmt.Errorf("fail to create transaction req=%q: %w", newReq.StartLine(), err)
-		}
-		defer tx.Terminate()
-
-		res, err = getResponse(tx)
-		if err != nil {
-			return fmt.Errorf("fail to get response req=%q: %w", newReq.StartLine(), err)
+			return fmt.Errorf("fail to get response req=%q : %w", req.StartLine(), err)
 		}
 	}
 
@@ -281,7 +262,11 @@ func (p *Phone) Register(recipient sip.Uri) error {
 }
 
 type DialOptions struct {
-	// media      MediaStreamer
+	// Authentication via digest challenge
+	Username string
+	Password string
+
+	// Custom headers passed on INVITE
 	SipHeaders []sip.Header
 }
 
@@ -297,11 +282,12 @@ func (p *Phone) Dial(dialCtx context.Context, recipient sip.Uri, o DialOptions) 
 		}
 	}
 	// Remove password from uri.
-	// TODO in case password set, use with digest challenge
 	recipient.Password = ""
 
 	// Get our address
-	addr := p.getInterfaceAddr(network, recipient.HostPort())
+	host, listenPort, _ := p.getInterfaceHostPort(network, recipient.HostPort())
+	addr := net.JoinHostPort(host, strconv.Itoa(listenPort))
+	contactUri := sip.Uri{User: p.ua.Name, Host: host, Port: listenPort}
 
 	dialogCh := make(chan struct{})
 	closeDialog := func() {
@@ -330,10 +316,6 @@ func (p *Phone) Dial(dialCtx context.Context, recipient sip.Uri, o DialOptions) 
 		p.log.Fatal().Err(err).Msg("Fail to setup client handle")
 	}
 
-	// Check our listen addr
-	host, port, _ := net.SplitHostPort(addr)
-	listenPort, _ := strconv.Atoi(port)
-
 	// TODO setup session before
 	rtpPort := rand.Intn(1000*2)/2 + 6000
 
@@ -344,7 +326,8 @@ func (p *Phone) Dial(dialCtx context.Context, recipient sip.Uri, o DialOptions) 
 	req := sip.NewRequest(sip.INVITE, &recipient)
 	req.SetTransport(network)
 	req.AppendHeader(&sip.ContactHeader{
-		Address: sip.Uri{User: "sipgo", Host: host, Port: listenPort},
+		Address: contactUri,
+		Params:  sip.HeaderParams{"transport": network},
 	})
 	req.AppendHeader(sip.NewHeader("Content-Type", "application/sdp"))
 	req.SetBody(sdpSend)
@@ -354,6 +337,7 @@ func (p *Phone) Dial(dialCtx context.Context, recipient sip.Uri, o DialOptions) 
 		log.Info().Str(h.Name(), h.Value()).Msg("Adding SIP header")
 		req.AppendHeader(h)
 	}
+
 	tx, err := client.TransactionRequest(req)
 	if err != nil {
 		return nil, fmt.Errorf("fail to send invite: %w", err)
@@ -366,29 +350,40 @@ func (p *Phone) Dial(dialCtx context.Context, recipient sip.Uri, o DialOptions) 
 	var r *sip.Response
 	not200err := func() error {
 		for {
-			select {
-			case r = <-tx.Responses():
-				p.log.Info().Msgf("Response: %s", r.StartLine())
-				if r.StatusCode == 200 {
-					return nil
-				}
-
-				if r.StatusCode/100 == 1 {
-					continue
-				}
-
-				// p.log.Info().Msgf("Got unvanted response\n%s", r.String())
-				return fmt.Errorf("Call not answered: %s", r.StartLine())
-			case <-tx.Done():
-
-				return tx.Err()
-			case <-ctx.Done():
-				// Send cancel ??
+			r, err = getResponse(ctx, tx)
+			if err == context.Canceled || err == context.DeadlineExceeded {
 				if err := client.WriteRequest(sip.NewCancelRequest(req)); err != nil {
 					p.log.Error().Err(err).Msg("Failed to send CANCEL")
 				}
 				return ctx.Err()
 			}
+
+			if err != nil {
+				return err
+			}
+
+			p.log.Info().Msgf("Response: %s", r.StartLine())
+
+			if r.StatusCode == sip.StatusUnauthorized && o.Password != "" {
+				tx.Terminate() // Terminate previous
+				tx, err = digestTransactionRequest(client, o.Username, o.Password, req, r)
+				if err != nil {
+					return err
+				}
+
+				continue
+			}
+
+			if r.StatusCode == 200 {
+				return nil
+			}
+
+			if r.StatusCode/100 == 1 {
+				continue
+			}
+
+			// p.log.Info().Msgf("Got unvanted response\n%s", r.String())
+			return fmt.Errorf("Call not answered: %s", r.StartLine())
 		}
 	}()
 
@@ -662,11 +657,46 @@ func (p *Phone) generateSDP(rtpPort int) []byte {
 	return SDPGeneric(ip, ip, rtpPort, SDPModeSendrecv)
 }
 
-func getResponse(tx sip.ClientTransaction) (*sip.Response, error) {
+func getResponse(ctx context.Context, tx sip.ClientTransaction) (*sip.Response, error) {
 	select {
 	case <-tx.Done():
 		return nil, fmt.Errorf("transaction died")
 	case res := <-tx.Responses():
 		return res, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
 	}
+}
+
+// digestTransactionRequest checks response if 401 and sends digest auth
+// TODO maybe this should be part of client
+func digestTransactionRequest(client *sipgo.Client, username string, password string, req *sip.Request, res *sip.Response) (sip.ClientTransaction, error) {
+	// Get WwW-Authenticate
+	wwwAuth := res.GetHeader("WWW-Authenticate")
+	chal, err := digest.ParseChallenge(wwwAuth.Value())
+	if err != nil {
+		return nil, fmt.Errorf("fail to parse chalenge wwwauth=%q: %w", wwwAuth.Value(), err)
+	}
+
+	// Reply with digest
+	cred, err := digest.Digest(chal, digest.Options{
+		Method: req.Method.String(),
+		// URI:      req.Recipient.Addr(),
+		Username: username,
+		Password: password,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("fail to build digest: %w", err)
+	}
+
+	cseq, _ := req.CSeq()
+	cseq.SeqNo++
+	// newReq := req.Clone()
+
+	req.AppendHeader(sip.NewHeader("Authorization", cred.String()))
+	defer req.RemoveHeader("Authorization")
+
+	req.RemoveHeader("Via")
+	tx, err := client.TransactionRequest(req, sipgo.ClientRequestAddVia)
+	return tx, err
 }
