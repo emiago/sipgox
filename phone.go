@@ -2,6 +2,7 @@ package sipgox
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -32,6 +33,7 @@ type Phone struct {
 type ListenAddr struct {
 	Network string
 	Addr    string
+	TLSConf *tls.Config
 }
 
 type Listener struct {
@@ -200,7 +202,7 @@ var (
 
 // Register the phone by sip uri.
 // Sip should have sip:username:password@destination at least defined
-func (p *Phone) Register(recipient sip.Uri) error {
+func (p *Phone) Register(ctx context.Context, recipient sip.Uri) error {
 	// Make our client reuse address
 	network := recipient.Headers["transport"]
 	host, port, _ := p.getInterfaceHostPort(network, recipient.HostPort())
@@ -228,8 +230,7 @@ func (p *Phone) Register(recipient sip.Uri) error {
 
 	// Send request and parse response
 	// req.SetDestination(*dst)
-	ctx := context.Background()
-	tx, err := client.TransactionRequest(req.Clone())
+	tx, err := client.TransactionRequest(ctx, req)
 	if err != nil {
 		return fmt.Errorf("fail to create transaction req=%q: %w", req.StartLine(), err)
 	}
@@ -287,7 +288,7 @@ func (p *Phone) Dial(dialCtx context.Context, recipient sip.Uri, o DialOptions) 
 	// Get our address
 	host, listenPort, _ := p.getInterfaceHostPort(network, recipient.HostPort())
 	addr := net.JoinHostPort(host, strconv.Itoa(listenPort))
-	contactUri := sip.Uri{User: p.ua.Name, Host: host, Port: listenPort}
+	contactUri := sip.Uri{User: p.ua.Name(), Host: host, Port: listenPort}
 
 	dialogCh := make(chan struct{})
 	closeDialog := func() {
@@ -338,7 +339,7 @@ func (p *Phone) Dial(dialCtx context.Context, recipient sip.Uri, o DialOptions) 
 		req.AppendHeader(h)
 	}
 
-	tx, err := client.TransactionRequest(req)
+	tx, err := client.TransactionRequest(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("fail to send invite: %w", err)
 	}
@@ -697,6 +698,6 @@ func digestTransactionRequest(client *sipgo.Client, username string, password st
 	defer req.RemoveHeader("Authorization")
 
 	req.RemoveHeader("Via")
-	tx, err := client.TransactionRequest(req, sipgo.ClientRequestAddVia)
+	tx, err := client.TransactionRequest(context.TODO(), req, sipgo.ClientRequestAddVia)
 	return tx, err
 }
