@@ -70,7 +70,7 @@ func (d *DialDialog) Hangup(ctx context.Context) error {
 	}
 	defer d.MediaSession.Close()
 
-	tx, err := d.sendRequest(reqBye)
+	tx, err := d.sendRequest(ctx, reqBye)
 	if err != nil {
 		return err
 	}
@@ -91,11 +91,11 @@ func (d *DialDialog) Hangup(ctx context.Context) error {
 	return nil
 }
 
-func (d *DialDialog) sendRequest(req *sip.Request) (sip.ClientTransaction, error) {
+func (d *DialDialog) sendRequest(ctx context.Context, req *sip.Request) (sip.ClientTransaction, error) {
 	// Create new via header depending on our client settings
 	// OTHERWISE this can fail and it will try to reuse connection from VIA header
 	req.RemoveHeader("Via")
-	tx, err := d.c.TransactionRequest(req, sipgo.ClientRequestAddVia)
+	tx, err := d.c.TransactionRequest(ctx, req, sipgo.ClientRequestAddVia)
 	return tx, err
 }
 
