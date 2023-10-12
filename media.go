@@ -214,6 +214,23 @@ func (m *MediaSession) WriteRTP(p *rtp.Packet) error {
 	return nil
 }
 
+func (m *MediaSession) WriteRCCP(p rtcp.Packet) error {
+	data, err := p.Marshal()
+	if err != nil {
+		return err
+	}
+
+	n, err := m.rtcpConn.WriteTo(data, m.Dst)
+	if err != nil {
+		return err
+	}
+
+	if n != len(data) {
+		return io.ErrShortWrite
+	}
+	return nil
+}
+
 func selectFormats(sendCodecs []string, recvCodecs []string) []int {
 	formats := make([]int, 0, cap(sendCodecs))
 	parseErr := []error{}
