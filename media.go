@@ -214,7 +214,7 @@ func (m *MediaSession) WriteRTP(p *rtp.Packet) error {
 	return nil
 }
 
-func (m *MediaSession) WriteRCCP(p rtcp.Packet) error {
+func (m *MediaSession) WriteRTCP(p rtcp.Packet) error {
 	data, err := p.Marshal()
 	if err != nil {
 		return err
