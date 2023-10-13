@@ -10,6 +10,8 @@ github.com/emiago/sipgo v0.13.1-0.20230926211454-aba02f7c5a40 h1:il3KpYGEmSgc6Ay
 github.com/emiago/sipgo v0.13.1-0.20230926211454-aba02f7c5a40/go.mod h1:L81oe7msujAXpnspKdwMHLSNqKXjJp1dyNWGu/Q8oXg=
 github.com/emiago/sipgo v0.13.2-0.20231009192038-8b5bcf81c649 h1:3D+S1D846Gk6wAwElKZRWhacNhWcvd3+c4S+KmqMpeY=
 github.com/emiago/sipgo v0.13.2-0.20231009192038-8b5bcf81c649/go.mod h1:L81oe7msujAXpnspKdwMHLSNqKXjJp1dyNWGu/Q8oXg=
+github.com/emiago/sipgo v0.13.2-0.20231010195147-ea18b6531ed7 h1:fRi5Tr+sXZ2EH3rt72246WksJiVqmD24OnRkicQMACw=
+github.com/emiago/sipgo v0.13.2-0.20231010195147-ea18b6531ed7/go.mod h1:L81oe7msujAXpnspKdwMHLSNqKXjJp1dyNWGu/Q8oXg=
 github.com/faiface/beep v1.0.2/go.mod h1:1yLb5yRdHMsovYYWVqYLioXkVuziCSITW1oarTeduQM=
 github.com/faiface/beep v1.1.0 h1:A2gWP6xf5Rh7RG/p9/VAW2jRSDEGQm5sbOb38sf5d4c=
 github.com/faiface/beep v1.1.0/go.mod h1:6I8p6kK2q4opL/eWb+kAkk38ehnTunWeToJB+s51sT4=
