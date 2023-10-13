@@ -4,7 +4,7 @@ go 1.20
 
 require (
 	github.com/MarkKremer/microphone v1.1.0
-	github.com/emiago/sipgo v0.13.2-0.20231009192038-8b5bcf81c649
+	github.com/emiago/sipgo v0.13.2-0.20231010195147-ea18b6531ed7
 	github.com/faiface/beep v1.1.0
 	github.com/icholy/digest v0.1.22
 	github.com/pion/rtcp v1.2.10
