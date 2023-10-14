@@ -397,21 +397,21 @@ func (p *Phone) Dial(dialCtx context.Context, recipient sip.Uri, o DialOptions) 
 		Str("duration", time.Since(waitStart).String()).
 		Msg("Call answered")
 
-	// Send ACK
-	reqACK := sip.NewAckRequest(req, r, nil)
-	if err := client.WriteRequest(reqACK); err != nil {
-		return nil, fmt.Errorf("fail to send ACK: %w", err)
-	}
-
-	// Setup media
+		// Setup media
 	msess, err := NewMediaSessionFromSDP(sdpSend, r.Body())
-	// msess, err := NewMediaSession(ip, rtpPort, dstIP, dstPort.Value)
+	// TODO handle bad SDP
 	if err != nil {
 		return nil, err
 	}
 
 	if err := msess.Dial(); err != nil {
 		return nil, fmt.Errorf("Fail to open media connection: %w", err)
+	}
+
+	// Send ACK
+	reqACK := sip.NewAckRequest(req, r, nil)
+	if err := client.WriteRequest(reqACK); err != nil {
+		return nil, fmt.Errorf("fail to send ACK: %w", err)
 	}
 
 	return &DialDialog{
