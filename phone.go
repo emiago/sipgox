@@ -59,12 +59,6 @@ func WithPhoneLogger(l zerolog.Logger) PhoneOption {
 }
 
 func NewPhone(ua *sipgo.UserAgent, options ...PhoneOption) *Phone {
-
-	// client, err := sipgo.NewClient(ua)
-	// if err != nil {
-	// 	p.log.Fatal().Err(err).Msg("Fail to setup client handle")
-	// }
-
 	p := &Phone{
 		ua: ua,
 		// c:           client,
@@ -285,9 +279,12 @@ func (p *Phone) Dial(dialCtx context.Context, recipient sip.Uri, o DialOptions) 
 	// Remove password from uri.
 	recipient.Password = ""
 
-	// Get our address
-	host, listenPort, _ := p.getInterfaceHostPort(network, recipient.HostPort())
-	addr := net.JoinHostPort(host, strconv.Itoa(listenPort))
+	// Get our address.
+	// TODO have a interface for defining instead listen
+	host, listenPort, err := p.getInterfaceHostPort(network, recipient.HostPort())
+	if err != nil {
+		return nil, fmt.Errorf("Parsing interface host port failed. Check ListenAddr for defining : %w", err)
+	}
 	contactUri := sip.Uri{User: p.ua.Name(), Host: host, Port: listenPort}
 
 	dialogCh := make(chan struct{})
@@ -310,7 +307,9 @@ func (p *Phone) Dial(dialCtx context.Context, recipient sip.Uri, o DialOptions) 
 	// Server handle will register our handler on UA level
 	// Here we make sure we are using server UA
 	client, err := sipgo.NewClient(p.s.UserAgent,
-		sipgo.WithClientAddr(addr), // We must have this address for Contact header
+		// We must have this address for Contact header
+		sipgo.WithClientHostname(host),
+		sipgo.WithClientPort(listenPort),
 	)
 
 	if err != nil {
