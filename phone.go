@@ -410,8 +410,9 @@ func (p *Phone) Dial(dialCtx context.Context, recipient sip.Uri, o DialOptions) 
 		return nil, err
 	}
 
-	// TODO check SDP
-	// applyCodecs(msess, sd)
+	if err := msess.Dial(); err != nil {
+		return nil, fmt.Errorf("Fail to open media connection: %w", err)
+	}
 
 	return &DialDialog{
 		MediaSession:   msess,
@@ -536,7 +537,11 @@ func (p *Phone) Answer(ansCtx context.Context, opts AnswerOptions) (*DialDialog,
 
 				// TODO in order to support SDP updates for formats
 				msess, err := NewMediaSessionFromSDP(answerSD, req.Body())
-				// msess, err := NewMediaSession(ip, rtpPort, dstIP, dstPort.Value)
+				if err != nil {
+					return nil, nil, err
+				}
+
+				err = msess.Dial()
 				if errors.Is(err, syscall.EADDRINUSE) {
 					continue
 				}

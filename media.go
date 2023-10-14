@@ -8,26 +8,17 @@ import (
 
 	"github.com/pion/rtcp"
 	"github.com/pion/rtp"
-	"github.com/rs/zerolog/log"
 )
 
 type MediaSession struct {
 	RTPport int
-	Dst     *net.UDPAddr
-	// rtpDstConn *net.UDPConn
+	Raddr   *net.UDPAddr
+	Laddr   *net.UDPAddr
 
-	rtpConn  *net.UDPConn
-	rtcpConn *net.UDPConn
+	rtpConn  io.ReadWriteCloser
+	rtcpConn io.ReadWriteCloser
 
 	Formats []int // For now can be set depending on SDP exchange
-}
-
-func (m *MediaSession) LocalRTPAddr() *net.UDPAddr {
-	return m.rtpConn.LocalAddr().(*net.UDPAddr)
-}
-
-func (m *MediaSession) LocalRTCPAddr() *net.UDPAddr {
-	return m.rtcpConn.LocalAddr().(*net.UDPAddr)
 }
 
 func NewMediaSessionFromSDP(sdpSend []byte, sdpReceived []byte) (s *MediaSession, err error) {
@@ -96,56 +87,74 @@ func NewMediaSessionFromSDP(sdpSend []byte, sdpReceived []byte) (s *MediaSession
 		return nil, fmt.Errorf(emsg)
 	}
 
-	mess, err := NewMediaSession(connectionIP, rtpPort, dstIP, dstPort, formats)
-	if err != nil {
-		return nil, err
-	}
-
-	return mess, nil
-}
-
-func NewMediaSession(ip net.IP, rtpPort int, dstIP net.IP, dstPort int, formats []int) (s *MediaSession, err error) {
-	// Generate random rtp port
-	// Prepare our media ports for recv
-	// RTP port must be even, but RTCP must be odd
-	// Range 6000 - 7000
-	// rtpPort := rand.Intn(1000*2)/2 + 6000
-
-	// What if RTP port not availale?
-
-	// RTP
-	rtpladdr, _ := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", ip.String(), rtpPort))
-	rtpConn, err := net.ListenUDP("udp", rtpladdr)
-	if err != nil {
-		return nil, err
-	}
-
-	// RTCP is always rtpPort + 1
-	rtcpladdr, _ := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", ip.String(), rtpPort+1))
-	rtcpConn, err := net.ListenUDP("udp", rtcpladdr)
-	if err != nil {
-		return nil, err
-	}
-
-	log.Debug().Str("rtp", rtpladdr.String()).Str("rtcp", rtcpladdr.String()).Msg("Setting up media session")
-	s = &MediaSession{
-		RTPport:  rtpPort,
-		rtpConn:  rtpConn,
-		rtcpConn: rtcpConn,
-		Dst: &net.UDPAddr{
+	mess := NewMediaSession(
+		formats,
+		&net.UDPAddr{
+			IP:   connectionIP,
+			Port: rtpPort,
+		},
+		&net.UDPAddr{
 			IP:   dstIP,
 			Port: dstPort,
 		},
-		// rtpDstConn: rtpDstConn,
+	)
+	return mess, nil
+}
+
+func NewMediaSession(formats []int, laddr *net.UDPAddr, raddr *net.UDPAddr) (s *MediaSession) {
+	s = &MediaSession{
 		Formats: formats,
+		Laddr:   laddr,
+		Raddr:   raddr,
 	}
 
-	return s, nil
+	return s
+}
+
+// Dial is setup connection for UDP, so it is more creating UPD listeners
+func (s *MediaSession) Dial() error {
+	laddr, raddr := s.Laddr, s.Raddr
+	var err error
+
+	dialerRTP := net.Dialer{
+		LocalAddr: laddr,
+	}
+
+	dialerRTCP := net.Dialer{
+		// RTCP is always rtpPort + 1
+		LocalAddr: &net.UDPAddr{IP: laddr.IP, Port: laddr.Port + 1},
+	}
+	// RTP
+	// rtpladdr, _ := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", ip.String(), rtpPort))
+	s.rtpConn, err = dialerRTP.Dial("udp", raddr.String())
+	if err != nil {
+		return err
+	}
+	// s.rtpConn, err = net.ListenUDP("udp", rtpladdr)
+	// if err != nil {
+	// 	return nil, err
+	// }
+
+	// rtcpladdr, _ := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", ip.String(), rtpPort+1))
+	// s.rtcpConn, err = net.ListenUDP("udp", rtcpladdr)
+	dstAddr := net.JoinHostPort(raddr.IP.String(), strconv.Itoa(raddr.Port+1))
+	// Check here is rtcp mux
+	s.rtcpConn, err = dialerRTCP.Dial("udp", dstAddr)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (s *MediaSession) Close() {
-	s.rtcpConn.Close()
-	s.rtpConn.Close()
+	if s.rtcpConn != nil {
+		s.rtcpConn.Close()
+	}
+
+	if s.rtpConn != nil {
+		s.rtpConn.Close()
+	}
 }
 
 func (s *MediaSession) UpdateDestinationSDP(sdpReceived []byte) error {
@@ -165,8 +174,8 @@ func (s *MediaSession) UpdateDestinationSDP(sdpReceived []byte) error {
 		return err
 	}
 
-	s.Dst.IP = ci.IP
-	s.Dst.Port = md.Port
+	s.Raddr.IP = ci.IP
+	s.Raddr.Port = md.Port
 
 	// TODO, we should maybe again check with our previous SDP?
 	// we will consider that update is considering sent codecs
@@ -178,7 +187,8 @@ func (m *MediaSession) ReadRTP() (rtp.Packet, error) {
 	p := rtp.Packet{}
 
 	buf := make([]byte, 1600)
-	n, err := m.rtpConn.Read(buf)
+
+	n, err := m.ReadRTPRaw(buf)
 	if err != nil {
 		return p, err
 	}
@@ -186,15 +196,28 @@ func (m *MediaSession) ReadRTP() (rtp.Packet, error) {
 	return p, p.Unmarshal(buf[:n])
 }
 
-func (m *MediaSession) ReadRTCP() ([]rtcp.Packet, error) {
+func (m *MediaSession) ReadRTPRaw(buf []byte) (int, error) {
+	n, err := m.rtpConn.Read(buf)
+	return n, err
+}
 
+func (m *MediaSession) ReadRTCP() ([]rtcp.Packet, error) {
 	buf := make([]byte, 1600)
-	n, err := m.rtcpConn.Read(buf)
+
+	n, err := m.ReadRTCPRaw(buf)
 	if err != nil {
 		return nil, err
 	}
 
 	return rtcp.Unmarshal(buf[:n])
+}
+
+func (m *MediaSession) ReadRTCPRaw(buf []byte) (int, error) {
+	if m.rtcpConn == nil {
+		// just block
+		select {}
+	}
+	return m.rtcpConn.Read(buf)
 }
 
 func (m *MediaSession) WriteRTP(p *rtp.Packet) error {
@@ -203,7 +226,8 @@ func (m *MediaSession) WriteRTP(p *rtp.Packet) error {
 		return err
 	}
 
-	n, err := m.rtpConn.WriteTo(data, m.Dst)
+	// n, err := m.rtpConn.WriteTo(data, m.Dst)
+	n, err := m.rtpConn.Write(data)
 	if err != nil {
 		return err
 	}
@@ -220,7 +244,8 @@ func (m *MediaSession) WriteRTCP(p rtcp.Packet) error {
 		return err
 	}
 
-	n, err := m.rtcpConn.WriteTo(data, m.Dst)
+	// n, err := m.rtcpConn.WriteTo(data, m.Dst)
+	n, err := m.rtcpConn.Write(data)
 	if err != nil {
 		return err
 	}
