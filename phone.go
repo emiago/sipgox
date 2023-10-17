@@ -498,9 +498,22 @@ func (p *Phone) Answer(ansCtx context.Context, opts AnswerOptions) (*DialDialog,
 			p.log.Fatal().Err(err).Msg("Fail to setup client handle")
 		}
 
+		// rhost, rport, _ := sip.ParseAddr(req.Source())
+
+		lhost, lport, _ := sip.ParseAddr(listeners[0].Addr)
+		contactHdr := &sip.ContactHeader{
+			Address: sip.Uri{
+				User:    p.s.Name(),
+				Host:    lhost,
+				Port:    lport,
+				Headers: sip.HeaderParams{"transport": listeners[0].Network},
+			},
+		}
+
 		// Now place a ring tone or do autoanswer
 		if ringtime > 0 {
 			res := sip.NewResponseFromRequest(req, 180, "Ringing", nil)
+			res.AppendHeader(contactHdr)
 			if err := tx.Respond(res); err != nil {
 				p.log.Error().Err(err).Msg("Fail to send 180 response")
 				return
@@ -522,6 +535,7 @@ func (p *Phone) Answer(ansCtx context.Context, opts AnswerOptions) (*DialDialog,
 		} else {
 			// Send progress
 			res := sip.NewResponseFromRequest(req, 100, "Trying", nil)
+			res.AppendHeader(contactHdr)
 			if err := tx.Respond(res); err != nil {
 				p.log.Error().Err(err).Msg("Fail to send 100 response")
 				return
@@ -556,6 +570,10 @@ func (p *Phone) Answer(ansCtx context.Context, opts AnswerOptions) (*DialDialog,
 		p.log.Info().Ints("formats", msess.Formats).Msg("Media session created")
 
 		res := sip.NewSDPResponseFromRequest(req, answerSD)
+		// via, _ := res.Via()
+		// via.Params["received"] = rhost
+		// via.Params["rport"] = strconv.Itoa(rport)
+		res.AppendHeader(contactHdr)
 
 		// Add custom headers
 		for _, h := range opts.SipHeaders {

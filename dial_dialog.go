@@ -35,10 +35,11 @@ func (d *DialDialog) Done() <-chan struct{} {
 func (d *DialDialog) Hangup(ctx context.Context) error {
 	req, res := d.InviteRequest, d.InviteResponse
 
-	reqBye := sip.NewByeRequest(req, res, nil)
+	reqBye := sip.NewByeRequestUAC(req, res, nil)
+	// reqBye.
+
 	if d.contact != nil {
 		// Reverse from and to
-		fmt.Println("REVERSING HEADERS")
 		from, _ := res.From()
 		to, _ := res.To()
 
