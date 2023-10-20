@@ -426,9 +426,16 @@ func (p *Phone) Dial(dialCtx context.Context, recipient sip.Uri, o DialOptions) 
 type AnswerOptions struct {
 	Ringtime   time.Duration
 	SipHeaders []sip.Header
+
+	// For authorizing INVITE
+	Username string
+	Password string
+	Realm    string //default sipgo
 }
 
 // Answer will answer call
+// Closing ansCtx will close listeners or it will be closed on BYE
+// TODO: reusing listener
 func (p *Phone) Answer(ansCtx context.Context, opts AnswerOptions) (*DialDialog, error) {
 	ringtime := opts.Ringtime
 
@@ -450,6 +457,7 @@ func (p *Phone) Answer(ansCtx context.Context, opts AnswerOptions) (*DialDialog,
 		}
 	}
 
+	var chal *digest.Challenge
 	p.s.OnInvite(func(req *sip.Request, tx sip.ServerTransaction) {
 		if d != nil {
 			didAnswered, _ := sip.MakeDialogIDFromResponse(d.InviteResponse)
@@ -476,6 +484,63 @@ func (p *Phone) Answer(ansCtx context.Context, opts AnswerOptions) (*DialDialog,
 			return
 		}
 
+		if opts.Password != "" {
+			// https://www.rfc-editor.org/rfc/rfc2617#page-6
+			h := req.GetHeader("Authorization")
+
+			if h == nil {
+				if chal != nil {
+					// If challenge is created next is forbidden
+					res := sip.NewResponseFromRequest(req, 403, "Forbidden", nil)
+					tx.Respond(res)
+					return
+				}
+
+				if opts.Realm == "" {
+					opts.Realm = "sipgo"
+				}
+
+				chal = &digest.Challenge{
+					Realm: opts.Realm,
+					Nonce: fmt.Sprintf("%d", time.Now().UnixMicro()),
+					// Opaque:    "sipgo",
+					Algorithm: "MD5",
+				}
+
+				res := sip.NewResponseFromRequest(req, 401, "Unathorized", nil)
+				res.AppendHeader(sip.NewHeader("WWW-Authenticate", chal.String()))
+				tx.Respond(res)
+				return
+			}
+
+			cred, err := digest.ParseCredentials(h.Value())
+			if err != nil {
+				log.Error().Err(err).Msg("parsing creds failed")
+				tx.Respond(sip.NewResponseFromRequest(req, 401, "Bad credentials", nil))
+				return
+			}
+
+			// Make digest and compare response
+			digCred, err := digest.Digest(chal, digest.Options{
+				Method:   "INVITE",
+				URI:      cred.URI,
+				Username: opts.Username,
+				Password: opts.Password,
+			})
+
+			if err != nil {
+				log.Error().Err(err).Msg("Calc digest failed")
+				tx.Respond(sip.NewResponseFromRequest(req, 401, "Bad credentials", nil))
+				return
+			}
+
+			if cred.Response != digCred.Response {
+				tx.Respond(sip.NewResponseFromRequest(req, 401, "Unathorized", nil))
+				return
+			}
+			log.Info().Str("username", cred.Username).Str("source", req.Source()).Msg("INVITE authorized")
+		}
+
 		from, _ := req.From()
 		defer stopAnswer()
 
@@ -499,7 +564,6 @@ func (p *Phone) Answer(ansCtx context.Context, opts AnswerOptions) (*DialDialog,
 		}
 
 		// rhost, rport, _ := sip.ParseAddr(req.Source())
-
 		lhost, lport, _ := sip.ParseAddr(listeners[0].Addr)
 		contactHdr := &sip.ContactHeader{
 			Address: sip.Uri{
@@ -630,6 +694,11 @@ func (p *Phone) Answer(ansCtx context.Context, opts AnswerOptions) (*DialDialog,
 
 		// This on 2xx
 		if d == nil {
+			if chal != nil {
+				// Ack is for authorization
+				return
+			}
+
 			p.log.Error().Msg("Received ack but no dialog")
 			stopAnswer()
 		}
@@ -649,16 +718,12 @@ func (p *Phone) Answer(ansCtx context.Context, opts AnswerOptions) (*DialDialog,
 			p.log.Error().Err(err).Msg("Fail to send BYE 200 response")
 			return
 		}
-		stopAnswer()
+		stopAnswer() // This will close listener
 
 		// Close dialog as well
 		if d != nil {
 			close(d.done)
 			d = nil
-		}
-
-		for _, l := range listeners {
-			l.Close()
 		}
 	})
 
