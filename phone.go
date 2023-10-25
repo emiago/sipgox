@@ -256,6 +256,21 @@ func (p *Phone) Register(ctx context.Context, recipient sip.Uri) error {
 	return nil
 }
 
+type DialResponseError struct {
+	InviteReq  *sip.Request
+	InviteResp *sip.Response
+
+	Msg string
+}
+
+func (e *DialResponseError) StatusCode() sip.StatusCode {
+	return e.InviteResp.StatusCode
+}
+
+func (e DialResponseError) Error() string {
+	return e.Msg
+}
+
 type DialOptions struct {
 	// Authentication via digest challenge
 	Username string
@@ -265,6 +280,9 @@ type DialOptions struct {
 	SipHeaders []sip.Header
 }
 
+// Dial creates dialog with recipient
+//
+// return DialResponseError in case non 200 responses
 func (p *Phone) Dial(dialCtx context.Context, recipient sip.Uri, o DialOptions) (*DialDialog, error) {
 	// ip := p.ua.GetIP()
 	ctx, _ := context.WithCancel(dialCtx)
@@ -383,7 +401,11 @@ func (p *Phone) Dial(dialCtx context.Context, recipient sip.Uri, o DialOptions) 
 			}
 
 			// p.log.Info().Msgf("Got unvanted response\n%s", r.String())
-			return fmt.Errorf("Call not answered: %s", r.StartLine())
+			return &DialResponseError{
+				InviteReq:  req,
+				InviteResp: r,
+				Msg:        fmt.Sprintf("Call not answered: %s", r.StartLine()),
+			}
 		}
 	}()
 
@@ -431,6 +453,10 @@ type AnswerOptions struct {
 	Username string
 	Password string
 	Realm    string //default sipgo
+
+	// Default is 200 (answer a call)
+	answerCode   sip.StatusCode
+	answerReason string
 }
 
 // Answer will answer call
@@ -555,14 +581,6 @@ func (p *Phone) Answer(ansCtx context.Context, opts AnswerOptions) (*DialDialog,
 			}
 		}
 
-		// Create client handle for responding
-		// It is hard here to force address in case multiple listeners
-		client, err := sipgo.NewClient(p.s.UserAgent) // sipgo.WithClientHostname("127.0.0.100"),
-
-		if err != nil {
-			p.log.Fatal().Err(err).Msg("Fail to setup client handle")
-		}
-
 		// rhost, rport, _ := sip.ParseAddr(req.Source())
 		lhost, lport, _ := sip.ParseAddr(listeners[0].Addr)
 		contactHdr := &sip.ContactHeader{
@@ -572,6 +590,41 @@ func (p *Phone) Answer(ansCtx context.Context, opts AnswerOptions) (*DialDialog,
 				Port:    lport,
 				Headers: sip.HeaderParams{"transport": listeners[0].Network},
 			},
+		}
+
+		if opts.answerCode > 0 && opts.answerCode != sip.StatusOK {
+			// TODO make special functions
+			res := sip.NewResponseFromRequest(req, opts.answerCode, opts.answerReason, nil)
+
+			if err := tx.Respond(res); err != nil {
+				d = nil
+				p.log.Error().Err(err).Int("code", int(opts.answerCode)).Msg("Fail to respond custom status code")
+				return
+			}
+
+			d = &DialDialog{
+				InviteRequest:  req,
+				InviteResponse: res,
+				contact:        &contact.Address,
+				done:           make(chan struct{}),
+			}
+			select {
+			case <-tx.Done():
+			case <-tx.Acks():
+				// Wait for ack
+				waitDialog <- d
+			case <-ctx.Done():
+			}
+			return
+		}
+
+		// Create client handle for responding
+		// It is hard here to force address in case multiple listeners
+		client, err := sipgo.NewClient(p.s.UserAgent) // sipgo.WithClientHostname("127.0.0.100"),
+
+		if err != nil {
+			p.log.Error().Err(err).Msg("Fail to setup client handle")
+			return
 		}
 
 		// Now place a ring tone or do autoanswer
@@ -645,12 +698,6 @@ func (p *Phone) Answer(ansCtx context.Context, opts AnswerOptions) (*DialDialog,
 			res.AppendHeader(h)
 		}
 
-		if err := tx.Respond(res); err != nil {
-			p.log.Error().Err(err).Msg("Fail to send BYE 200 response")
-			return
-		}
-		p.log.Info().Msgf("Response: %s", res.StartLine())
-
 		d = &DialDialog{
 			MediaSession:   msess,
 			InviteRequest:  req,
@@ -659,6 +706,13 @@ func (p *Phone) Answer(ansCtx context.Context, opts AnswerOptions) (*DialDialog,
 			c:              client,
 			done:           make(chan struct{}),
 		}
+
+		if err := tx.Respond(res); err != nil {
+			p.log.Error().Err(err).Msg("Fail to send 200 response")
+			d = nil
+			return
+		}
+		p.log.Info().Msgf("Response: %s", res.StartLine())
 
 		// FOR ASTERISK YOU NEED TO REPLY WITH SAME RECIPIENT
 		// IN CASE PROXY AND IN DIALOG handling this must be contact address -.-
@@ -738,6 +792,20 @@ func (p *Phone) Answer(ansCtx context.Context, opts AnswerOptions) (*DialDialog,
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
+}
+
+// AnswerWithCode will answer with custom code
+// Dialog object is created but it is immediately closed
+func (p *Phone) AnswerWithCode(ansCtx context.Context, code sip.StatusCode, reason string, opts AnswerOptions) (*DialDialog, error) {
+	// TODO, do all options make sense?
+	opts.answerCode = code
+	opts.answerReason = reason
+	dialog, err := p.Answer(ansCtx, opts)
+	if err != nil {
+		return nil, err
+	}
+	close(dialog.done)
+	return dialog, err
 }
 
 func (p *Phone) generateSDP(rtpPort int) []byte {
