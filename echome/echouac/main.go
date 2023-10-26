@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/emiago/sipgo"
-	"github.com/emiago/sipgo/parser"
 	"github.com/emiago/sipgo/sip"
 	"github.com/emiago/sipgox"
 	"github.com/pion/rtp"
@@ -57,7 +56,7 @@ func main() {
 	target := flag.Arg(0)
 
 	recipient := sip.Uri{User: *username, Headers: sip.NewParams()}
-	if err := parser.ParseUri(target, &recipient); err != nil {
+	if err := sip.ParseUri(target, &recipient); err != nil {
 		log.Fatal().Err(err).Msg("Target bad format")
 	}
 
