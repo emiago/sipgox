@@ -1,6 +1,10 @@
 
-# How to make proxy service configurable
+# PSIP is extension for SIPGO for easy building proxy 
 
+For now this is **idea**, to hide lot of complexity and provide configurable proxy setup.
+
+
+If you like it and want to happen please support [sipgo project](https://ko-fi.com/emiasupport)
 
 
 ## Controling request and relay
@@ -38,11 +42,11 @@ proxy.OnRequest(func(rc RequestContext) {
 
     // Check headers
 
-    // TOPOS for topology hidding
+    // Topoh for topology hidding.
     // Creates and new request and removes any internal topology
     // - Changes Via
     // - Updates recipient
-    req := rc.Topos(req)
+    req := rc.Topoh(req)
     // When RequestContext is dead it will trigger TOPOS cleanup (database) ext
 
 
@@ -121,13 +125,20 @@ WithProxyOutboundTarget(
 - IN case 200 response for INVITE it creates dialog which can be accessed via `rc.Dialog()`
 
 
-### RTP proxy
+### SBC and RTP proxy integration features
+
+Minimum set of features to be provided.
+
+SBC:
+- `Topoh` is topology hidding for you SIP signaling and can be called in RequestContext
+- Source address IP auth via inbound/outbound matchIP
+- RTP proxy integrated
+- Rate limiting
 
 RTP Proxy signaling:
 - Reads INVITE SDP
 - Setups RTP/RTCP ports for proxy external and internal interface (interface call as it can be seperate Service)
-- Changes to local interface address where our proxy 172.17.0.0/12
-- Applies new SDP with internal RTP/RTCP ports
+- Applies new SDP with internal IP RTP/RTCP ports
 - Relays request
 - Reads Response (only 200)
 - Changes SDP to external interface 
@@ -146,12 +157,8 @@ RTP Proxy signaling:
 - 
 
 
-# How to unit test request/response
+# Unit testing your route handler
 
-This requires simulating UAC and UAS and testing our `OnRequest`  handler
-
-TODO
-
-
+TODO!
 
 
