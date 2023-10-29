@@ -85,7 +85,8 @@ With this simple logic proxy builder can do:
 - Digest auth out of box 
 - Dialog routing out of box
 
-## Inbound Outbound targets
+## Building proxy options
+### Inbound Outbound targets
 
 Here how to configure proxy inbound/outbound targets.
 
@@ -107,6 +108,26 @@ WithProxyOutboundTarget(
     0.5 // In case multiple matching carrier  < 1.0 request is loadbalanced
 )
 ```
+
+### Running as registrar 
+
+```go
+
+store := NewRegistryMemory()
+WithProxyRegistry(store)
+```
+`WithProxyRegistry` receives interface so any external database can be implemented.
+In this case `RelayRequest` will call internal registry handler
+
+### Presence 
+
+```go
+
+presence := NewUserPresenceMemory()
+WithProxyUserPresence(presence)
+```
+SUBSCRIBE and NOTIFY will be handled by local presence service
+In this case `RelayRequest` will call internal presence handler
 ## RelayRequest
 
 `RelayRequest` flow:
