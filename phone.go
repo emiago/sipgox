@@ -462,6 +462,15 @@ type AnswerOptions struct {
 // Answer will answer call
 // Closing ansCtx will close listeners or it will be closed on BYE
 // TODO: reusing listener
+
+var (
+	// You can use this key with AnswerReadyCtxValue to get signal when
+	// Answer is ready to receive traffic
+	AnswerReadyCtxKey = "AnswerReadyCtxKey"
+)
+
+type AnswerReadyCtxValue chan struct{}
+
 func (p *Phone) Answer(ansCtx context.Context, opts AnswerOptions) (*DialDialog, error) {
 	ringtime := opts.Ringtime
 
@@ -786,10 +795,15 @@ func (p *Phone) Answer(ansCtx context.Context, opts AnswerOptions) (*DialDialog,
 		go l.Listen()
 	}
 
+	if v := ctx.Value(AnswerReadyCtxKey); v != nil {
+		close(v.(AnswerReadyCtxValue))
+	}
+
 	select {
 	case d = <-waitDialog:
 		return d, nil
 	case <-ctx.Done():
+		stopAnswer()
 		return nil, ctx.Err()
 	}
 }
