@@ -471,11 +471,11 @@ var (
 
 type AnswerReadyCtxValue chan struct{}
 
-func (p *Phone) Answer(ansCtx context.Context, opts AnswerOptions) (*DialDialog, error) {
+func (p *Phone) Answer(ansCtx context.Context, opts AnswerOptions) (*DialogServerSession, error) {
 	ringtime := opts.Ringtime
 
-	waitDialog := make(chan *DialDialog)
-	var d *DialDialog
+	waitDialog := make(chan *DialogServerSession)
+	var d *DialogServerSession
 
 	// We need to listen as long our answer context is running
 	// Listener needs to be alive even after we have created dialog
@@ -491,6 +491,22 @@ func (p *Phone) Answer(ansCtx context.Context, opts AnswerOptions) (*DialDialog,
 			l.Close()
 		}
 	}
+
+	// Create client handle for responding
+	// It is hard here to force address in case multiple listeners
+	client, err := sipgo.NewClient(p.s.UserAgent) // sipgo.WithClientHostname("127.0.0.100"),
+
+	lhost, lport, _ := sip.ParseAddr(listeners[0].Addr)
+	contactHdr := sip.ContactHeader{
+		Address: sip.Uri{
+			User:    p.s.Name(),
+			Host:    lhost,
+			Port:    lport,
+			Headers: sip.HeaderParams{"transport": listeners[0].Network},
+		},
+	}
+
+	ds := sipgo.NewDialogServer(client, contactHdr)
 
 	var chal *digest.Challenge
 	p.s.OnInvite(func(req *sip.Request, tx sip.ServerTransaction) {
@@ -581,9 +597,9 @@ func (p *Phone) Answer(ansCtx context.Context, opts AnswerOptions) (*DialDialog,
 
 		p.log.Info().Str("from", from.Address.Addr()).Str("name", from.DisplayName).Msg("Received call")
 
-		contact, exists := req.Contact()
-		if !exists {
-			res := sip.NewResponseFromRequest(req, 400, "No Contact header", nil)
+		dialog, err := ds.ReadInvite(req, tx)
+		if err != nil {
+			res := sip.NewResponseFromRequest(req, 400, err.Error(), nil)
 			if err := tx.Respond(res); err != nil {
 				p.log.Error().Err(err).Msg("Fail to send 400 response")
 				return
@@ -591,31 +607,36 @@ func (p *Phone) Answer(ansCtx context.Context, opts AnswerOptions) (*DialDialog,
 		}
 
 		// rhost, rport, _ := sip.ParseAddr(req.Source())
-		lhost, lport, _ := sip.ParseAddr(listeners[0].Addr)
-		contactHdr := &sip.ContactHeader{
-			Address: sip.Uri{
-				User:    p.s.Name(),
-				Host:    lhost,
-				Port:    lport,
-				Headers: sip.HeaderParams{"transport": listeners[0].Network},
-			},
-		}
+		// lhost, lport, _ := sip.ParseAddr(listeners[0].Addr)
+		// contactHdr := &sip.ContactHeader{
+		// 	Address: sip.Uri{
+		// 		User:    p.s.Name(),
+		// 		Host:    lhost,
+		// 		Port:    lport,
+		// 		Headers: sip.HeaderParams{"transport": listeners[0].Network},
+		// 	},
+		// }
 
 		if opts.answerCode > 0 && opts.answerCode != sip.StatusOK {
 			// TODO make special functions
-			res := sip.NewResponseFromRequest(req, opts.answerCode, opts.answerReason, nil)
+			// res := sip.NewResponseFromRequest(req, opts.answerCode, opts.answerReason, nil)
 
-			if err := tx.Respond(res); err != nil {
+			if err := dialog.Respond(opts.answerCode, opts.answerReason, nil); err != nil {
 				d = nil
 				p.log.Error().Err(err).Int("code", int(opts.answerCode)).Msg("Fail to respond custom status code")
 				return
 			}
 
-			d = &DialDialog{
-				InviteRequest:  req,
-				InviteResponse: res,
-				contact:        &contact.Address,
-				done:           make(chan struct{}),
+			// d = &DialDialog{
+			// 	InviteRequest:  req,
+			// 	InviteResponse: res,
+			// 	contact:        &contact.Address,
+			// 	done:           make(chan struct{}),
+			// }
+
+			d = &DialogServerSession{
+				DialogServerSession: dialog,
+				done:                make(chan struct{}),
 			}
 			select {
 			case <-tx.Done():
@@ -629,7 +650,7 @@ func (p *Phone) Answer(ansCtx context.Context, opts AnswerOptions) (*DialDialog,
 
 		// Create client handle for responding
 		// It is hard here to force address in case multiple listeners
-		client, err := sipgo.NewClient(p.s.UserAgent) // sipgo.WithClientHostname("127.0.0.100"),
+		// client, err := sipgo.NewClient(p.s.UserAgent) // sipgo.WithClientHostname("127.0.0.100"),
 
 		if err != nil {
 			p.log.Error().Err(err).Msg("Fail to setup client handle")
@@ -639,8 +660,7 @@ func (p *Phone) Answer(ansCtx context.Context, opts AnswerOptions) (*DialDialog,
 		// Now place a ring tone or do autoanswer
 		if ringtime > 0 {
 			res := sip.NewResponseFromRequest(req, 180, "Ringing", nil)
-			res.AppendHeader(contactHdr)
-			if err := tx.Respond(res); err != nil {
+			if err := dialog.WriteResponse(res); err != nil {
 				p.log.Error().Err(err).Msg("Fail to send 180 response")
 				return
 			}
@@ -661,11 +681,13 @@ func (p *Phone) Answer(ansCtx context.Context, opts AnswerOptions) (*DialDialog,
 		} else {
 			// Send progress
 			res := sip.NewResponseFromRequest(req, 100, "Trying", nil)
-			res.AppendHeader(contactHdr)
-			if err := tx.Respond(res); err != nil {
+			// res.AppendHeader(contactHdr)
+			if err := dialog.WriteResponse(res); err != nil {
 				p.log.Error().Err(err).Msg("Fail to send 100 response")
 				return
 			}
+
+			p.log.Info().Msgf("Response: %s", res.StartLine())
 		}
 
 		// Setup media
@@ -699,7 +721,7 @@ func (p *Phone) Answer(ansCtx context.Context, opts AnswerOptions) (*DialDialog,
 		// via, _ := res.Via()
 		// via.Params["received"] = rhost
 		// via.Params["rport"] = strconv.Itoa(rport)
-		res.AppendHeader(contactHdr)
+		// res.AppendHeader(contactHdr)
 
 		// Add custom headers
 		for _, h := range opts.SipHeaders {
@@ -707,16 +729,22 @@ func (p *Phone) Answer(ansCtx context.Context, opts AnswerOptions) (*DialDialog,
 			res.AppendHeader(h)
 		}
 
-		d = &DialDialog{
-			MediaSession:   msess,
-			InviteRequest:  req,
-			InviteResponse: res,
-			contact:        &contact.Address,
-			c:              client,
-			done:           make(chan struct{}),
+		// d = &DialDialog{
+		// 	MediaSession:   msess,
+		// 	InviteRequest:  req,
+		// 	InviteResponse: res,
+		// 	contact:        &contact.Address,
+		// 	c:              client,
+		// 	done:           make(chan struct{}),
+		// }
+
+		d = &DialogServerSession{
+			DialogServerSession: dialog,
+			MediaSession:        msess,
+			done:                make(chan struct{}),
 		}
 
-		if err := tx.Respond(res); err != nil {
+		if err := dialog.WriteResponse(res); err != nil {
 			p.log.Error().Err(err).Msg("Fail to send 200 response")
 			d = nil
 			return
@@ -748,13 +776,6 @@ func (p *Phone) Answer(ansCtx context.Context, opts AnswerOptions) (*DialDialog,
 	})
 
 	p.s.OnAck(func(req *sip.Request, tx sip.ServerTransaction) {
-		// https://datatracker.ietf.org/doc/html/rfc3261#section-13.2.2.4
-		// 	However, the callee's UA MUST NOT send a BYE on a confirmed dialog
-		//    until it has received an ACK for its 2xx response or until the server
-		//    transaction times out.  If no SIP extensions have defined other
-		//    application layer states associated with the dialog, the BYE also
-		//    terminates the diap.log.
-
 		// This on 2xx
 		if d == nil {
 			if chal != nil {
@@ -766,6 +787,11 @@ func (p *Phone) Answer(ansCtx context.Context, opts AnswerOptions) (*DialDialog,
 			stopAnswer()
 		}
 
+		if err := ds.ReadAck(req, tx); err != nil {
+			p.log.Error().Err(err).Msg("Dialog ACK err")
+			return
+		}
+
 		select {
 		case waitDialog <- d:
 		case <-ctx.Done():
@@ -775,12 +801,11 @@ func (p *Phone) Answer(ansCtx context.Context, opts AnswerOptions) (*DialDialog,
 	})
 
 	p.s.OnBye(func(req *sip.Request, tx sip.ServerTransaction) {
-		p.log.Debug().Msg("Received BYE")
-		res := sip.NewResponseFromRequest(req, 200, "OK", nil)
-		if err := tx.Respond(res); err != nil {
-			p.log.Error().Err(err).Msg("Fail to send BYE 200 response")
+		if err := ds.ReadBye(req, tx); err != nil {
+			p.log.Error().Err(err).Msg("Dialog BYE err")
 			return
 		}
+
 		stopAnswer() // This will close listener
 
 		// Close dialog as well
@@ -810,7 +835,7 @@ func (p *Phone) Answer(ansCtx context.Context, opts AnswerOptions) (*DialDialog,
 
 // AnswerWithCode will answer with custom code
 // Dialog object is created but it is immediately closed
-func (p *Phone) AnswerWithCode(ansCtx context.Context, code sip.StatusCode, reason string, opts AnswerOptions) (*DialDialog, error) {
+func (p *Phone) AnswerWithCode(ansCtx context.Context, code sip.StatusCode, reason string, opts AnswerOptions) (*DialogServerSession, error) {
 	// TODO, do all options make sense?
 	opts.answerCode = code
 	opts.answerReason = reason
