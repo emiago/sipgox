@@ -283,7 +283,7 @@ type DialOptions struct {
 // Dial creates dialog with recipient
 //
 // return DialResponseError in case non 200 responses
-func (p *Phone) Dial(dialCtx context.Context, recipient sip.Uri, o DialOptions) (*DialDialog, error) {
+func (p *Phone) Dial(dialCtx context.Context, recipient sip.Uri, o DialOptions) (*DialogClientSession, error) {
 	// ip := p.ua.GetIP()
 	ctx, _ := context.WithCancel(dialCtx)
 	// defer cancel()
@@ -304,35 +304,36 @@ func (p *Phone) Dial(dialCtx context.Context, recipient sip.Uri, o DialOptions) 
 		return nil, fmt.Errorf("Parsing interface host port failed. Check ListenAddr for defining : %w", err)
 	}
 	contactUri := sip.Uri{User: p.ua.Name(), Host: host, Port: listenPort}
-
-	dialogCh := make(chan struct{})
-	closeDialog := func() {
-		close(dialogCh)
+	contactHDR := sip.ContactHeader{
+		Address: contactUri,
+		Params:  sip.HeaderParams{"transport": network},
 	}
 
-	// Setup srv for bye
-	p.s.OnBye(func(req *sip.Request, tx sip.ServerTransaction) {
-		defer closeDialog()
-		res := sip.NewResponseFromRequest(req, 200, "OK", nil)
-		if err := tx.Respond(res); err != nil {
-			p.log.Error().Err(err).Msg("Fail to send BYE 200 response")
-			return
-		}
-		p.log.Debug().Msg("Received BYE")
-	})
+	// dialogCh := make(chan struct{})
+	// closeDialog := func() {
+	// 	close(dialogCh)
+	// }
 
-	// We only need client handle
-	// Server handle will register our handler on UA level
-	// Here we make sure we are using server UA
 	client, err := sipgo.NewClient(p.s.UserAgent,
 		// We must have this address for Contact header
 		sipgo.WithClientHostname(host),
 		sipgo.WithClientPort(listenPort),
 	)
-
 	if err != nil {
-		p.log.Fatal().Err(err).Msg("Fail to setup client handle")
+		return nil, err
 	}
+
+	dc := sipgo.NewDialogClient(client, contactHDR)
+
+	// Setup srv for bye
+	p.s.OnBye(func(req *sip.Request, tx sip.ServerTransaction) {
+		// defer closeDialog()
+		if err := dc.ReadBye(req, tx); err != nil {
+			p.log.Error().Err(err).Msg("Fail to setup client handle")
+			return
+		}
+		p.log.Debug().Msg("Received BYE")
+	})
 
 	// TODO setup session before
 	rtpPort := rand.Intn(1000*2)/2 + 6000
@@ -343,10 +344,6 @@ func (p *Phone) Dial(dialCtx context.Context, recipient sip.Uri, o DialOptions) 
 	// Creating INVITE
 	req := sip.NewRequest(sip.INVITE, &recipient)
 	req.SetTransport(network)
-	req.AppendHeader(&sip.ContactHeader{
-		Address: contactUri,
-		Params:  sip.HeaderParams{"transport": network},
-	})
 	req.AppendHeader(sip.NewHeader("Content-Type", "application/sdp"))
 	req.SetBody(sdpSend)
 
@@ -356,63 +353,77 @@ func (p *Phone) Dial(dialCtx context.Context, recipient sip.Uri, o DialOptions) 
 		req.AppendHeader(h)
 	}
 
-	tx, err := client.TransactionRequest(ctx, req)
-	if err != nil {
-		return nil, fmt.Errorf("fail to send invite: %w", err)
-	}
-	defer tx.Terminate()
-	p.log.Info().Msgf("Request: %s", req.StartLine())
+	// dialog, err := dc.Invite(ctx, &recipient, sdpSend,
+	// 	append(o.SipHeaders, sip.NewHeader("Content-Type", "application/sdp"))...)
 
 	// Wait 200
 	waitStart := time.Now()
-	var r *sip.Response
-	not200err := func() error {
-		for {
-			r, err = getResponse(ctx, tx)
-			if err == context.Canceled || err == context.DeadlineExceeded {
-				if err := client.WriteRequest(sip.NewCancelRequest(req)); err != nil {
-					p.log.Error().Err(err).Msg("Failed to send CANCEL")
-				}
-				return ctx.Err()
-			}
+	dialog, err := dc.WriteInvite(ctx, req, sipgo.InviteOptions{
+		OnResponse: func(res *sip.Response) {
+			p.log.Info().Msgf("Response: %s", res.StartLine())
+		},
+		Username: o.Username,
+		Password: o.Password,
+	})
 
-			if err != nil {
-				return err
-			}
-
-			p.log.Info().Msgf("Response: %s", r.StartLine())
-
-			if r.StatusCode == sip.StatusUnauthorized && o.Password != "" {
-				tx.Terminate() // Terminate previous
-				tx, err = digestTransactionRequest(client, o.Username, o.Password, req, r)
-				if err != nil {
-					return err
-				}
-
-				continue
-			}
-
-			if r.StatusCode == 200 {
-				return nil
-			}
-
-			if r.StatusCode/100 == 1 {
-				continue
-			}
-
-			// p.log.Info().Msgf("Got unvanted response\n%s", r.String())
-			return &DialResponseError{
-				InviteReq:  req,
-				InviteResp: r,
-				Msg:        fmt.Sprintf("Call not answered: %s", r.StartLine()),
-			}
+	var rerr *sipgo.ErrDialogResponse
+	if errors.As(err, &rerr) {
+		return nil, &DialResponseError{
+			InviteReq:  req,
+			InviteResp: rerr.Res,
+			Msg:        fmt.Sprintf("Call not answered: %s", rerr.Res.StartLine()),
 		}
-	}()
-
-	if not200err != nil {
-		return nil, not200err
 	}
 
+	// var r *sip.Response
+	// not200err := func() error {
+	// 	for {
+	// 		r, err = getResponse(ctx, tx)
+	// 		if err == context.Canceled || err == context.DeadlineExceeded {
+	// 			if err := client.WriteRequest(sip.NewCancelRequest(req)); err != nil {
+	// 				p.log.Error().Err(err).Msg("Failed to send CANCEL")
+	// 			}
+	// 			return ctx.Err()
+	// 		}
+
+	// 		if err != nil {
+	// 			return err
+	// 		}
+
+	// 		p.log.Info().Msgf("Response: %s", r.StartLine())
+
+	// 		if r.StatusCode == sip.StatusUnauthorized && o.Password != "" {
+	// 			tx.Terminate() // Terminate previous
+	// 			tx, err = digestTransactionRequest(client, o.Username, o.Password, req, r)
+	// 			if err != nil {
+	// 				return err
+	// 			}
+
+	// 			continue
+	// 		}
+
+	// 		if r.StatusCode == 200 {
+	// 			return nil
+	// 		}
+
+	// 		if r.StatusCode/100 == 1 {
+	// 			continue
+	// 		}
+
+	// 		// p.log.Info().Msgf("Got unvanted response\n%s", r.String())
+	// 		return &DialResponseError{
+	// 			InviteReq:  req,
+	// 			InviteResp: r,
+	// 			Msg:        fmt.Sprintf("Call not answered: %s", r.StartLine()),
+	// 		}
+	// 	}
+	// }()
+
+	// if not200err != nil {
+	// 	return nil, not200err
+	// }
+
+	r := dialog.InviteResponse
 	p.log.Info().
 		Int("code", int(r.StatusCode)).
 		Str("reason", r.Reason).
@@ -436,12 +447,10 @@ func (p *Phone) Dial(dialCtx context.Context, recipient sip.Uri, o DialOptions) 
 		return nil, fmt.Errorf("fail to send ACK: %w", err)
 	}
 
-	return &DialDialog{
-		MediaSession:   msess,
-		InviteRequest:  req,
-		InviteResponse: r,
-		c:              client,
-		done:           dialogCh,
+	return &DialogClientSession{
+		MediaSession:        msess,
+		DialogClientSession: dialog,
+		// done:                dialogCh,
 	}, nil
 }
 
