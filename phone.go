@@ -107,6 +107,16 @@ func (p *Phone) getInterfaceHostPort(network string, targetAddr string) (ipstr s
 	// Go with random
 	port = rand.Intn(9999) + 50000
 
+	if network == "udp" {
+		tip, _, _ := sip.ParseAddr(targetAddr)
+		if ip := net.ParseIP(tip); ip != nil {
+			if ip.IsLoopback() {
+				// TO avoid UDP COnnected connection problem hitting different subnet
+				return "127.0.0.99", port, nil
+			}
+		}
+	}
+
 	ip, err := sip.ResolveSelfIP()
 	return ip.String(), port, err
 }
@@ -309,11 +319,6 @@ func (p *Phone) Dial(dialCtx context.Context, recipient sip.Uri, o DialOptions) 
 		Params:  sip.HeaderParams{"transport": network},
 	}
 
-	// dialogCh := make(chan struct{})
-	// closeDialog := func() {
-	// 	close(dialogCh)
-	// }
-
 	client, err := sipgo.NewClient(p.s.UserAgent,
 		// We must have this address for Contact header
 		sipgo.WithClientHostname(host),
@@ -327,7 +332,6 @@ func (p *Phone) Dial(dialCtx context.Context, recipient sip.Uri, o DialOptions) 
 
 	// Setup srv for bye
 	p.s.OnBye(func(req *sip.Request, tx sip.ServerTransaction) {
-		// defer closeDialog()
 		if err := dc.ReadBye(req, tx); err != nil {
 			p.log.Error().Err(err).Msg("Fail to setup client handle")
 			return
@@ -353,9 +357,6 @@ func (p *Phone) Dial(dialCtx context.Context, recipient sip.Uri, o DialOptions) 
 		req.AppendHeader(h)
 	}
 
-	// dialog, err := dc.Invite(ctx, &recipient, sdpSend,
-	// 	append(o.SipHeaders, sip.NewHeader("Content-Type", "application/sdp"))...)
-
 	// Wait 200
 	waitStart := time.Now()
 	dialog, err := dc.WriteInvite(ctx, req, sipgo.InviteOptions{
@@ -375,53 +376,9 @@ func (p *Phone) Dial(dialCtx context.Context, recipient sip.Uri, o DialOptions) 
 		}
 	}
 
-	// var r *sip.Response
-	// not200err := func() error {
-	// 	for {
-	// 		r, err = getResponse(ctx, tx)
-	// 		if err == context.Canceled || err == context.DeadlineExceeded {
-	// 			if err := client.WriteRequest(sip.NewCancelRequest(req)); err != nil {
-	// 				p.log.Error().Err(err).Msg("Failed to send CANCEL")
-	// 			}
-	// 			return ctx.Err()
-	// 		}
-
-	// 		if err != nil {
-	// 			return err
-	// 		}
-
-	// 		p.log.Info().Msgf("Response: %s", r.StartLine())
-
-	// 		if r.StatusCode == sip.StatusUnauthorized && o.Password != "" {
-	// 			tx.Terminate() // Terminate previous
-	// 			tx, err = digestTransactionRequest(client, o.Username, o.Password, req, r)
-	// 			if err != nil {
-	// 				return err
-	// 			}
-
-	// 			continue
-	// 		}
-
-	// 		if r.StatusCode == 200 {
-	// 			return nil
-	// 		}
-
-	// 		if r.StatusCode/100 == 1 {
-	// 			continue
-	// 		}
-
-	// 		// p.log.Info().Msgf("Got unvanted response\n%s", r.String())
-	// 		return &DialResponseError{
-	// 			InviteReq:  req,
-	// 			InviteResp: r,
-	// 			Msg:        fmt.Sprintf("Call not answered: %s", r.StartLine()),
-	// 		}
-	// 	}
-	// }()
-
-	// if not200err != nil {
-	// 	return nil, not200err
-	// }
+	if err != nil {
+		return nil, err
+	}
 
 	r := dialog.InviteResponse
 	p.log.Info().
@@ -442,8 +399,7 @@ func (p *Phone) Dial(dialCtx context.Context, recipient sip.Uri, o DialOptions) 
 	}
 
 	// Send ACK
-	reqACK := sip.NewAckRequest(req, r, nil)
-	if err := client.WriteRequest(reqACK); err != nil {
+	if err := dialog.Ack(ctx); err != nil {
 		return nil, fmt.Errorf("fail to send ACK: %w", err)
 	}
 
@@ -615,33 +571,12 @@ func (p *Phone) Answer(ansCtx context.Context, opts AnswerOptions) (*DialogServe
 			}
 		}
 
-		// rhost, rport, _ := sip.ParseAddr(req.Source())
-		// lhost, lport, _ := sip.ParseAddr(listeners[0].Addr)
-		// contactHdr := &sip.ContactHeader{
-		// 	Address: sip.Uri{
-		// 		User:    p.s.Name(),
-		// 		Host:    lhost,
-		// 		Port:    lport,
-		// 		Headers: sip.HeaderParams{"transport": listeners[0].Network},
-		// 	},
-		// }
-
 		if opts.answerCode > 0 && opts.answerCode != sip.StatusOK {
-			// TODO make special functions
-			// res := sip.NewResponseFromRequest(req, opts.answerCode, opts.answerReason, nil)
-
 			if err := dialog.Respond(opts.answerCode, opts.answerReason, nil); err != nil {
 				d = nil
 				p.log.Error().Err(err).Int("code", int(opts.answerCode)).Msg("Fail to respond custom status code")
 				return
 			}
-
-			// d = &DialDialog{
-			// 	InviteRequest:  req,
-			// 	InviteResponse: res,
-			// 	contact:        &contact.Address,
-			// 	done:           make(chan struct{}),
-			// }
 
 			d = &DialogServerSession{
 				DialogServerSession: dialog,
@@ -656,10 +591,6 @@ func (p *Phone) Answer(ansCtx context.Context, opts AnswerOptions) (*DialogServe
 			}
 			return
 		}
-
-		// Create client handle for responding
-		// It is hard here to force address in case multiple listeners
-		// client, err := sipgo.NewClient(p.s.UserAgent) // sipgo.WithClientHostname("127.0.0.100"),
 
 		if err != nil {
 			p.log.Error().Err(err).Msg("Fail to setup client handle")
@@ -690,7 +621,6 @@ func (p *Phone) Answer(ansCtx context.Context, opts AnswerOptions) (*DialogServe
 		} else {
 			// Send progress
 			res := sip.NewResponseFromRequest(req, 100, "Trying", nil)
-			// res.AppendHeader(contactHdr)
 			if err := dialog.WriteResponse(res); err != nil {
 				p.log.Error().Err(err).Msg("Fail to send 100 response")
 				return
@@ -730,22 +660,12 @@ func (p *Phone) Answer(ansCtx context.Context, opts AnswerOptions) (*DialogServe
 		// via, _ := res.Via()
 		// via.Params["received"] = rhost
 		// via.Params["rport"] = strconv.Itoa(rport)
-		// res.AppendHeader(contactHdr)
 
 		// Add custom headers
 		for _, h := range opts.SipHeaders {
 			log.Info().Str(h.Name(), h.Value()).Msg("Adding SIP header")
 			res.AppendHeader(h)
 		}
-
-		// d = &DialDialog{
-		// 	MediaSession:   msess,
-		// 	InviteRequest:  req,
-		// 	InviteResponse: res,
-		// 	contact:        &contact.Address,
-		// 	c:              client,
-		// 	done:           make(chan struct{}),
-		// }
 
 		d = &DialogServerSession{
 			DialogServerSession: dialog,
