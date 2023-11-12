@@ -22,7 +22,7 @@ import (
 type Phone struct {
 	ua *sipgo.UserAgent
 	// c  *sipgo.Client
-	s *sipgo.Server
+	// s *sipgo.Server
 
 	// listenAddrs is map of transport:addr which will phone use to listen incoming requests
 	listenAddrs []ListenAddr
@@ -70,12 +70,6 @@ func NewPhone(ua *sipgo.UserAgent, options ...PhoneOption) *Phone {
 		o(p)
 	}
 
-	var err error
-	p.s, err = sipgo.NewServer(ua)
-	if err != nil {
-		p.log.Fatal().Err(err).Msg("Fail to setup server handle")
-	}
-
 	if len(p.listenAddrs) == 0 {
 		// WithPhoneListenAddr(ListenAddr{"udp", "127.0.0.1:5060"})(p)
 		// WithPhoneListenAddr(ListenAddr{"tcp", "0.0.0.0:5060"})(p)
@@ -86,7 +80,6 @@ func NewPhone(ua *sipgo.UserAgent, options ...PhoneOption) *Phone {
 }
 
 func (p *Phone) Close() {
-	p.s.Close()
 }
 
 func (p *Phone) getInterfaceAddr(network string, targetAddr string) (addr string, err error) {
@@ -121,7 +114,8 @@ func (p *Phone) getInterfaceHostPort(network string, targetAddr string) (ipstr s
 	return ip.String(), port, err
 }
 
-func (p *Phone) createServerListener(a ListenAddr) (*Listener, error) {
+func (p *Phone) createServerListener(s *sipgo.Server, a ListenAddr) (*Listener, error) {
+
 	network, addr := a.Network, a.Addr
 	switch network {
 	case "udp":
@@ -138,7 +132,7 @@ func (p *Phone) createServerListener(a ListenAddr) (*Listener, error) {
 		return &Listener{
 			a,
 			udpConn,
-			func() error { return p.s.ServeUDP(udpConn) },
+			func() error { return s.ServeUDP(udpConn) },
 		}, nil
 
 	case "ws", "tcp":
@@ -157,22 +151,22 @@ func (p *Phone) createServerListener(a ListenAddr) (*Listener, error) {
 			return &Listener{
 				a,
 				conn,
-				func() error { return p.s.ServeWS(conn) },
+				func() error { return s.ServeWS(conn) },
 			}, nil
 		}
 
 		return &Listener{
 			a,
 			conn,
-			func() error { return p.s.ServeTCP(conn) },
+			func() error { return s.ServeTCP(conn) },
 		}, nil
 	}
 	return nil, fmt.Errorf("Unsuported protocol")
 }
 
-func (p *Phone) createServerListeners() (listeners []*Listener, e error) {
+func (p *Phone) createServerListeners(s *sipgo.Server) (listeners []*Listener, e error) {
 	newListener := func(a ListenAddr) error {
-		l, err := p.createServerListener(a)
+		l, err := p.createServerListener(s, a)
 		if err != nil {
 			return err
 		}
@@ -212,7 +206,7 @@ func (p *Phone) Register(ctx context.Context, recipient sip.Uri) error {
 	host, port, _ := p.getInterfaceHostPort(network, recipient.HostPort())
 	addr := net.JoinHostPort(host, strconv.Itoa(port))
 
-	client, err := sipgo.NewClient(p.s.UserAgent,
+	client, err := sipgo.NewClient(p.ua,
 		sipgo.WithClientAddr(addr),
 	)
 	defer client.Close()
@@ -319,7 +313,7 @@ func (p *Phone) Dial(dialCtx context.Context, recipient sip.Uri, o DialOptions) 
 		Params:  sip.HeaderParams{"transport": network},
 	}
 
-	client, err := sipgo.NewClient(p.s.UserAgent,
+	client, err := sipgo.NewClient(p.ua,
 		// We must have this address for Contact header
 		sipgo.WithClientHostname(host),
 		sipgo.WithClientPort(listenPort),
@@ -328,10 +322,16 @@ func (p *Phone) Dial(dialCtx context.Context, recipient sip.Uri, o DialOptions) 
 		return nil, err
 	}
 
-	dc := sipgo.NewDialogClient(client, contactHDR)
+	server, err := sipgo.NewServer(p.ua)
+	if err != nil {
+		return nil, err
+	}
 
+	dc := sipgo.NewDialogClient(client, contactHDR)
+	dialogCh := make(chan struct{})
 	// Setup srv for bye
-	p.s.OnBye(func(req *sip.Request, tx sip.ServerTransaction) {
+	server.OnBye(func(req *sip.Request, tx sip.ServerTransaction) {
+		close(dialogCh)
 		if err := dc.ReadBye(req, tx); err != nil {
 			p.log.Error().Err(err).Msg("Fail to setup client handle")
 			return
@@ -359,7 +359,12 @@ func (p *Phone) Dial(dialCtx context.Context, recipient sip.Uri, o DialOptions) 
 
 	// Wait 200
 	waitStart := time.Now()
-	dialog, err := dc.WriteInvite(ctx, req, sipgo.InviteOptions{
+	dialog, err := dc.WriteInvite(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+
+	err = dialog.WaitAnswer(ctx, sipgo.AnswerOptions{
 		OnResponse: func(res *sip.Response) {
 			p.log.Info().Msgf("Response: %s", res.StartLine())
 		},
@@ -406,10 +411,17 @@ func (p *Phone) Dial(dialCtx context.Context, recipient sip.Uri, o DialOptions) 
 	return &DialogClientSession{
 		MediaSession:        msess,
 		DialogClientSession: dialog,
-		// done:                dialogCh,
+		done:                dialogCh,
 	}, nil
 }
 
+var (
+	// You can use this key with AnswerReadyCtxValue to get signal when
+	// Answer is ready to receive traffic
+	AnswerReadyCtxKey = "AnswerReadyCtxKey"
+)
+
+type AnswerReadyCtxValue chan struct{}
 type AnswerOptions struct {
 	Ringtime   time.Duration
 	SipHeaders []sip.Header
@@ -427,29 +439,26 @@ type AnswerOptions struct {
 // Answer will answer call
 // Closing ansCtx will close listeners or it will be closed on BYE
 // TODO: reusing listener
-
-var (
-	// You can use this key with AnswerReadyCtxValue to get signal when
-	// Answer is ready to receive traffic
-	AnswerReadyCtxKey = "AnswerReadyCtxKey"
-)
-
-type AnswerReadyCtxValue chan struct{}
-
 func (p *Phone) Answer(ansCtx context.Context, opts AnswerOptions) (*DialogServerSession, error) {
 	ringtime := opts.Ringtime
 
 	waitDialog := make(chan *DialogServerSession)
 	var d *DialogServerSession
 
+	server, err := sipgo.NewServer(p.ua)
+	if err != nil {
+		return nil, err
+	}
+
 	// We need to listen as long our answer context is running
 	// Listener needs to be alive even after we have created dialog
-	listeners, err := p.createServerListeners()
+	listeners, err := p.createServerListeners(server)
 	if err != nil {
 		return nil, err
 	}
 
 	ctx, cancel := context.WithCancel(ansCtx)
+	var exitErr error
 	stopAnswer := func() {
 		cancel() // Cancel context
 		for _, l := range listeners {
@@ -457,14 +466,18 @@ func (p *Phone) Answer(ansCtx context.Context, opts AnswerOptions) (*DialogServe
 		}
 	}
 
+	exitError := func(err error) {
+		exitErr = err
+	}
+
 	// Create client handle for responding
 	// It is hard here to force address in case multiple listeners
-	client, err := sipgo.NewClient(p.s.UserAgent) // sipgo.WithClientHostname("127.0.0.100"),
+	client, err := sipgo.NewClient(p.ua) // sipgo.WithClientHostname("127.0.0.100"),
 
 	lhost, lport, _ := sip.ParseAddr(listeners[0].Addr)
 	contactHdr := sip.ContactHeader{
 		Address: sip.Uri{
-			User:    p.s.Name(),
+			User:    p.ua.Name(),
 			Host:    lhost,
 			Port:    lport,
 			Headers: sip.HeaderParams{"transport": listeners[0].Network},
@@ -474,7 +487,7 @@ func (p *Phone) Answer(ansCtx context.Context, opts AnswerOptions) (*DialogServe
 	ds := sipgo.NewDialogServer(client, contactHdr)
 
 	var chal *digest.Challenge
-	p.s.OnInvite(func(req *sip.Request, tx sip.ServerTransaction) {
+	server.OnInvite(func(req *sip.Request, tx sip.ServerTransaction) {
 		if d != nil {
 			didAnswered, _ := sip.MakeDialogIDFromResponse(d.InviteResponse)
 			did, _ := sip.MakeDialogIDFromRequest(req)
@@ -558,153 +571,152 @@ func (p *Phone) Answer(ansCtx context.Context, opts AnswerOptions) (*DialogServe
 		}
 
 		from, _ := req.From()
-		defer stopAnswer()
-
 		p.log.Info().Str("from", from.Address.Addr()).Str("name", from.DisplayName).Msg("Received call")
 
-		dialog, err := ds.ReadInvite(req, tx)
-		if err != nil {
-			res := sip.NewResponseFromRequest(req, 400, err.Error(), nil)
-			if err := tx.Respond(res); err != nil {
-				p.log.Error().Err(err).Msg("Fail to send 400 response")
-				return
+		err := func() error {
+			dialog, err := ds.ReadInvite(req, tx)
+			if err != nil {
+				res := sip.NewResponseFromRequest(req, 400, err.Error(), nil)
+				if err := tx.Respond(res); err != nil {
+					p.log.Error().Err(err).Msg("Failed to send 400 response")
+				}
+				return err
 			}
-		}
 
-		if opts.answerCode > 0 && opts.answerCode != sip.StatusOK {
-			if err := dialog.Respond(opts.answerCode, opts.answerReason, nil); err != nil {
-				d = nil
-				p.log.Error().Err(err).Int("code", int(opts.answerCode)).Msg("Fail to respond custom status code")
-				return
+			if opts.answerCode > 0 && opts.answerCode != sip.StatusOK {
+				if err := dialog.Respond(opts.answerCode, opts.answerReason, nil); err != nil {
+					d = nil
+					return fmt.Errorf("Failed to respond custom status code %d: %w", int(opts.answerCode), err)
+				}
+
+				d = &DialogServerSession{
+					DialogServerSession: dialog,
+					done:                make(chan struct{}),
+				}
+				select {
+				case <-tx.Done():
+				case <-tx.Acks():
+					// Wait for ack
+					waitDialog <- d
+				case <-ctx.Done():
+				}
+				return nil
+			}
+
+			if err != nil {
+				return fmt.Errorf("fail to setup client handle: %w", err)
+			}
+
+			// Now place a ring tone or do autoanswer
+			if ringtime > 0 {
+				res := sip.NewResponseFromRequest(req, 180, "Ringing", nil)
+				if err := dialog.WriteResponse(res); err != nil {
+					return fmt.Errorf("failed to send 180 response: %w", err)
+				}
+				p.log.Info().Msgf("Response: %s", res.StartLine())
+
+				select {
+				case <-tx.Cancels():
+					return fmt.Errorf("Received CANCEL")
+				case <-tx.Done():
+					return fmt.Errorf("Invite transaction finished while ringing")
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-time.After(ringtime):
+					// Ring time finished
+				}
+			} else {
+				// Send progress
+				res := sip.NewResponseFromRequest(req, 100, "Trying", nil)
+				if err := dialog.WriteResponse(res); err != nil {
+					return fmt.Errorf("Fail to send 100 response: %w", err)
+				}
+
+				p.log.Info().Msgf("Response: %s", res.StartLine())
+			}
+
+			// Setup media
+			msess, answerSD, err := func() (*MediaSession, []byte, error) {
+				for {
+					// Now generate answer with our rtp ports
+					rtpPort := rand.Intn(1000*2)/2 + 6000
+					answerSD := p.generateSDP(rtpPort)
+
+					// TODO in order to support SDP updates for formats
+					msess, err := NewMediaSessionFromSDP(answerSD, req.Body())
+					if err != nil {
+						return nil, nil, err
+					}
+
+					err = msess.Dial()
+					if errors.Is(err, syscall.EADDRINUSE) {
+						continue
+					}
+					return msess, answerSD, err
+				}
+			}()
+
+			if err != nil {
+				return fmt.Errorf("Fail to setup media session: %w", err)
+			}
+			p.log.Info().Ints("formats", msess.Formats).Msg("Media session created")
+
+			res := sip.NewSDPResponseFromRequest(req, answerSD)
+			// via, _ := res.Via()
+			// via.Params["received"] = rhost
+			// via.Params["rport"] = strconv.Itoa(rport)
+
+			// Add custom headers
+			for _, h := range opts.SipHeaders {
+				log.Info().Str(h.Name(), h.Value()).Msg("Adding SIP header")
+				res.AppendHeader(h)
 			}
 
 			d = &DialogServerSession{
 				DialogServerSession: dialog,
+				MediaSession:        msess,
 				done:                make(chan struct{}),
 			}
-			select {
-			case <-tx.Done():
-			case <-tx.Acks():
-				// Wait for ack
-				waitDialog <- d
-			case <-ctx.Done():
-			}
-			return
-		}
 
-		if err != nil {
-			p.log.Error().Err(err).Msg("Fail to setup client handle")
-			return
-		}
-
-		// Now place a ring tone or do autoanswer
-		if ringtime > 0 {
-			res := sip.NewResponseFromRequest(req, 180, "Ringing", nil)
 			if err := dialog.WriteResponse(res); err != nil {
-				p.log.Error().Err(err).Msg("Fail to send 180 response")
-				return
+				d = nil
+				return fmt.Errorf("Fail to send 200 response: %w", err)
 			}
 			p.log.Info().Msgf("Response: %s", res.StartLine())
 
+			// FOR ASTERISK YOU NEED TO REPLY WITH SAME RECIPIENT
+			// IN CASE PROXY AND IN DIALOG handling this must be contact address -.-
+			// if req.GetHeader("Record-Route") == nil {
+			// 	f, _ := req.From()
+			// 	d.contact = &f.Address
+			// 	d.destination = req.Source()
+			// }
+
+			// applyCodecs(msess, sd)
+
+			// defer close(d.done)
+
 			select {
-			case <-tx.Cancels():
-				p.log.Info().Msg("Received CANCEL")
-				return
 			case <-tx.Done():
-				p.log.Error().Msg("Invite transaction finished while ringing")
-				return
+				// This can be as well TIMER L, which means we received ACK and no more retransmission of 200 will be done
 			case <-ctx.Done():
-				return
-			case <-time.After(ringtime):
-				// Ring time finished
-			}
-		} else {
-			// Send progress
-			res := sip.NewResponseFromRequest(req, 100, "Trying", nil)
-			if err := dialog.WriteResponse(res); err != nil {
-				p.log.Error().Err(err).Msg("Fail to send 100 response")
-				return
+				// We have received BYE OR Cancel, so we will ignore transaction waiting.
 			}
 
-			p.log.Info().Msgf("Response: %s", res.StartLine())
-		}
-
-		// Setup media
-		msess, answerSD, err := func() (*MediaSession, []byte, error) {
-			for {
-				// Now generate answer with our rtp ports
-				rtpPort := rand.Intn(1000*2)/2 + 6000
-				answerSD := p.generateSDP(rtpPort)
-
-				// TODO in order to support SDP updates for formats
-				msess, err := NewMediaSessionFromSDP(answerSD, req.Body())
-				if err != nil {
-					return nil, nil, err
-				}
-
-				err = msess.Dial()
-				if errors.Is(err, syscall.EADDRINUSE) {
-					continue
-				}
-				return msess, answerSD, err
+			if err := tx.Err(); err != nil {
+				return fmt.Errorf("Invite transaction ended with error: %w", err)
 			}
+			return nil
 		}()
 
 		if err != nil {
-			p.log.Error().Err(err).Msg("Fail to setup media session")
-			return
-		}
-		p.log.Info().Ints("formats", msess.Formats).Msg("Media session created")
-
-		res := sip.NewSDPResponseFromRequest(req, answerSD)
-		// via, _ := res.Via()
-		// via.Params["received"] = rhost
-		// via.Params["rport"] = strconv.Itoa(rport)
-
-		// Add custom headers
-		for _, h := range opts.SipHeaders {
-			log.Info().Str(h.Name(), h.Value()).Msg("Adding SIP header")
-			res.AppendHeader(h)
+			exitError(err)
+			stopAnswer()
 		}
 
-		d = &DialogServerSession{
-			DialogServerSession: dialog,
-			MediaSession:        msess,
-			done:                make(chan struct{}),
-		}
-
-		if err := dialog.WriteResponse(res); err != nil {
-			p.log.Error().Err(err).Msg("Fail to send 200 response")
-			d = nil
-			return
-		}
-		p.log.Info().Msgf("Response: %s", res.StartLine())
-
-		// FOR ASTERISK YOU NEED TO REPLY WITH SAME RECIPIENT
-		// IN CASE PROXY AND IN DIALOG handling this must be contact address -.-
-		// if req.GetHeader("Record-Route") == nil {
-		// 	f, _ := req.From()
-		// 	d.contact = &f.Address
-		// 	d.destination = req.Source()
-		// }
-
-		// applyCodecs(msess, sd)
-
-		// defer close(d.done)
-
-		select {
-		case <-tx.Done():
-			// This can be as well TIMER L, which means we received ACK and no more retransmission of 200 will be done
-		case <-ctx.Done():
-			// We have received BYE OR Cancel, so we will ignore transaction waiting.
-		}
-
-		if err := tx.Err(); err != nil {
-			p.log.Error().Err(err).Msg("Invite transaction ended with error")
-		}
 	})
 
-	p.s.OnAck(func(req *sip.Request, tx sip.ServerTransaction) {
+	server.OnAck(func(req *sip.Request, tx sip.ServerTransaction) {
 		// This on 2xx
 		if d == nil {
 			if chal != nil {
@@ -712,26 +724,29 @@ func (p *Phone) Answer(ansCtx context.Context, opts AnswerOptions) (*DialogServe
 				return
 			}
 
-			p.log.Error().Msg("Received ack but no dialog")
+			exitError(fmt.Errorf("Received ack but no dialog"))
 			stopAnswer()
 		}
 
 		if err := ds.ReadAck(req, tx); err != nil {
-			p.log.Error().Err(err).Msg("Dialog ACK err")
+			exitError(fmt.Errorf("Dialog ACK err: %w", err))
+			stopAnswer()
 			return
 		}
 
 		select {
 		case waitDialog <- d:
+			// Reset dialog for next receive
+			d = nil
 		case <-ctx.Done():
 		}
 
 		// Needs check for SDP is right?
 	})
 
-	p.s.OnBye(func(req *sip.Request, tx sip.ServerTransaction) {
+	server.OnBye(func(req *sip.Request, tx sip.ServerTransaction) {
 		if err := ds.ReadBye(req, tx); err != nil {
-			p.log.Error().Err(err).Msg("Dialog BYE err")
+			exitError(fmt.Errorf("Dialog BYE err: %w", err))
 			return
 		}
 
@@ -757,8 +772,14 @@ func (p *Phone) Answer(ansCtx context.Context, opts AnswerOptions) (*DialogServe
 	case d = <-waitDialog:
 		return d, nil
 	case <-ctx.Done():
-		stopAnswer()
-		return nil, ctx.Err()
+		// Check is this caller stopped answer
+		if ansCtx.Err() != nil {
+			stopAnswer()
+			return nil, ansCtx.Err()
+		}
+
+		// This is when our processing of answer stopped
+		return nil, exitErr
 	}
 }
 
