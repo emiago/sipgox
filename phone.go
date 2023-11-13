@@ -445,6 +445,7 @@ func (p *Phone) Answer(ansCtx context.Context, opts AnswerOptions) (*DialogServe
 	waitDialog := make(chan *DialogServerSession)
 	var d *DialogServerSession
 
+	// TODO reuse server and listener
 	server, err := sipgo.NewServer(p.ua)
 	if err != nil {
 		return nil, err
