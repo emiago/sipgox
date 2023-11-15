@@ -94,7 +94,7 @@ Here how to configure proxy inbound/outbound targets.
 WithProxyInboundTarget(
     sip.Uri{Host: "my.asterisk.xy", Port: 5060},
     // MatchIP should be defined in case URI is host name, otherwise it will be DNS resolved each time
-    gsip.MatchIP( 
+    psip.MatchIP( 
         "10.1.1.0/24", // With range ips to match in case this is dynamic
         "10.2.2.1", // With static ips
     ),
@@ -104,7 +104,7 @@ WithProxyInboundTarget(
 ```go
 WithProxyOutboundTarget(
     sip.Uri{Host: "sip.carrier.com", Port: 5060},
-    gsip.ToPrefix("49"), // or gsip.ToRegex("^49(1-2)"),
+    psip.ToPrefix("49"), // or psip.ToRegex("^49(1-2)"),
     0.5 // In case multiple matching carrier  < 1.0 request is loadbalanced
 )
 ```
