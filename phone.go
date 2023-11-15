@@ -771,6 +771,14 @@ func (p *Phone) Answer(ansCtx context.Context, opts AnswerOptions) (*DialogServe
 
 	select {
 	case d = <-waitDialog:
+		// Make sure we have cleanup after dialog stop
+		go func() {
+			select {
+			case <-d.Done():
+				stopAnswer()
+			}
+		}()
+
 		return d, nil
 	case <-ctx.Done():
 		// Check is this caller stopped answer
