@@ -133,8 +133,6 @@ func main() {
 
 		case <-dialog.Done():
 			return
-		case <-time.After(200 * time.Millisecond):
-			// Do every 200 milisecond RTP and check echo
 		}
 	}
 }

@@ -17,6 +17,18 @@ type DialogClientSession struct {
 	done chan struct{}
 }
 
+// func (d *DialogClientSession) Close() error {
+// 	select {
+// 	case <-d.done:
+// 		d.MediaSession.Close()
+// 	default:
+// 		// In case running session than do try sending hangup
+// 		ctx, _ := context.WithTimeout(context.Background(), 2*time.Second)
+// 		return d.Bye(ctx)
+// 	}
+// 	return nil
+// }
+
 func (d *DialogClientSession) Done() <-chan struct{} {
 	return d.done
 }

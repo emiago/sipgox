@@ -28,8 +28,25 @@ const (
 	SDPModeSendonly SDPMode = "sendonly"
 )
 
-func SDPGeneric(originIP net.IP, connectionIP net.IP, rtpPort int, mode SDPMode) []byte {
+type Formats struct {
+	Ulaw bool
+	Alaw bool
+}
+
+func SDPGeneric(originIP net.IP, connectionIP net.IP, rtpPort int, mode SDPMode, f Formats) []byte {
 	ntpTime := GetCurrentNTPTimestamp()
+
+	formatsStrArr := []string{}
+	formatsMap := []string{}
+	if f.Ulaw {
+		formatsStrArr = append(formatsStrArr, "0")
+		formatsMap = append(formatsMap, "a=rtpmap:0 PCMU/8000")
+	}
+
+	if f.Alaw {
+		formatsStrArr = append(formatsStrArr, "8")
+		formatsMap = append(formatsMap, "a=rtpmap:8 PCMA/8000")
+	}
 
 	// Support only ulaw and alaw
 	s := []string{
@@ -39,10 +56,10 @@ func SDPGeneric(originIP net.IP, connectionIP net.IP, rtpPort int, mode SDPMode)
 		// "b=AS:84",
 		fmt.Sprintf("c=IN IP4 %s", connectionIP),
 		"t=0 0",
-		fmt.Sprintf("m=audio %d RTP/AVP 0 8", rtpPort),
+		fmt.Sprintf("m=audio %d RTP/AVP %s", rtpPort, strings.Join(formatsStrArr, " ")),
 		"a=" + string(mode),
-		"a=rtpmap:0 PCMU/8000",
-		"a=rtpmap:8 PCMA/8000",
+		// "a=rtpmap:0 PCMU/8000",
+		// "a=rtpmap:8 PCMA/8000",
 		// "a=rtpmap:101 telephone-event/8000",
 		// "a=fmtp:101 0-16",
 		// "",
@@ -54,6 +71,8 @@ func SDPGeneric(originIP net.IP, connectionIP net.IP, rtpPort int, mode SDPMode)
 		// "a=rtcp-mux",
 		// fmt.Sprintf("a=rtcp:%d IN IP4 %s", rtpPort+1, connectionIP),
 	}
+
+	s = append(s, formatsMap...)
 
 	// s := []string{
 	// 	"v=0",

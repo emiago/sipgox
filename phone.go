@@ -282,6 +282,8 @@ type DialOptions struct {
 
 	// Custom headers passed on INVITE
 	SipHeaders []sip.Header
+
+	Formats Formats
 }
 
 // Dial creates dialog with recipient
@@ -343,7 +345,7 @@ func (p *Phone) Dial(dialCtx context.Context, recipient sip.Uri, o DialOptions) 
 	rtpPort := rand.Intn(1000*2)/2 + 6000
 
 	// Create Generic SDP
-	sdpSend := p.generateSDP(rtpPort)
+	sdpSend := p.generateSDP(rtpPort, o.Formats)
 
 	// Creating INVITE
 	req := sip.NewRequest(sip.INVITE, &recipient)
@@ -430,6 +432,9 @@ type AnswerOptions struct {
 	Username string
 	Password string
 	Realm    string //default sipgo
+
+	// For SDP codec manipulating
+	Formats Formats
 
 	// Default is 200 (answer a call)
 	answerCode   sip.StatusCode
@@ -641,7 +646,7 @@ func (p *Phone) Answer(ansCtx context.Context, opts AnswerOptions) (*DialogServe
 				for {
 					// Now generate answer with our rtp ports
 					rtpPort := rand.Intn(1000*2)/2 + 6000
-					answerSD := p.generateSDP(rtpPort)
+					answerSD := p.generateSDP(rtpPort, opts.Formats)
 
 					// TODO in order to support SDP updates for formats
 					msess, err := NewMediaSessionFromSDP(answerSD, req.Body())
@@ -806,9 +811,15 @@ func (p *Phone) AnswerWithCode(ansCtx context.Context, code sip.StatusCode, reas
 	return dialog, err
 }
 
-func (p *Phone) generateSDP(rtpPort int) []byte {
+func (p *Phone) generateSDP(rtpPort int, f Formats) []byte {
 	ip := p.ua.GetIP()
-	return SDPGeneric(ip, ip, rtpPort, SDPModeSendrecv)
+	if !f.Alaw && !f.Ulaw {
+		f = Formats{
+			Ulaw: true, // Enable only ulaw
+		}
+	}
+
+	return SDPGeneric(ip, ip, rtpPort, SDPModeSendrecv, f)
 }
 
 func getResponse(ctx context.Context, tx sip.ClientTransaction) (*sip.Response, error) {

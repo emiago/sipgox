@@ -5,6 +5,7 @@ import (
 	"io"
 	"net"
 	"strconv"
+	"time"
 
 	"github.com/pion/rtcp"
 	"github.com/pion/rtp"
@@ -15,8 +16,8 @@ type MediaSession struct {
 	Raddr   *net.UDPAddr
 	Laddr   *net.UDPAddr
 
-	rtpConn  io.ReadWriteCloser
-	rtcpConn io.ReadWriteCloser
+	rtpConn  net.Conn
+	rtcpConn net.Conn
 
 	Formats []int // For now can be set depending on SDP exchange
 }
@@ -126,10 +127,12 @@ func (s *MediaSession) Dial() error {
 	}
 	// RTP
 	// rtpladdr, _ := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", ip.String(), rtpPort))
-	s.rtpConn, err = dialerRTP.Dial("udp", raddr.String())
+	conn, err := dialerRTP.Dial("udp", raddr.String())
 	if err != nil {
 		return err
 	}
+
+	s.rtpConn = conn
 	// s.rtpConn, err = net.ListenUDP("udp", rtpladdr)
 	// if err != nil {
 	// 	return nil, err
@@ -140,6 +143,25 @@ func (s *MediaSession) Dial() error {
 	dstAddr := net.JoinHostPort(raddr.IP.String(), strconv.Itoa(raddr.Port+1))
 	// Check here is rtcp mux
 	s.rtcpConn, err = dialerRTCP.Dial("udp", dstAddr)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// Listen creates listeners instead
+func (s *MediaSession) Listen() error {
+	laddr := s.Laddr
+	var err error
+
+	rtpU, err := net.ListenUDP("udp", &net.UDPAddr{IP: laddr.IP, Port: laddr.Port})
+	if err != nil {
+		return err
+	}
+	s.rtpConn = rtpU
+
+	s.rtcpConn, err = net.ListenUDP("udp", &net.UDPAddr{IP: laddr.IP, Port: laddr.Port + 1})
 	if err != nil {
 		return err
 	}
@@ -194,6 +216,11 @@ func (m *MediaSession) ReadRTP() (rtp.Packet, error) {
 	}
 
 	return p, p.Unmarshal(buf[:n])
+}
+
+func (m *MediaSession) ReadRTPWithDeadline(t time.Time) (rtp.Packet, error) {
+	m.rtpConn.SetReadDeadline(t)
+	return m.ReadRTP()
 }
 
 func (m *MediaSession) ReadRTPRaw(buf []byte) (int, error) {
