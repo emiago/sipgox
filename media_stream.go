@@ -99,7 +99,7 @@ func MediaStreamLogger(log zerolog.Logger) MediaStreamer {
 				log.Info().Msg("Talking started")
 			}
 
-			log.Debug().Msg(p.String())
+			log.Debug().Msgf("%s\nPayload:%s", p.String(), p.Payload)
 
 			// Do some summary for info logging
 			if now.Add(-3 * time.Second).After(lastSummaryTime) {

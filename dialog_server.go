@@ -11,12 +11,11 @@ type DialogServerSession struct {
 	*MediaSession
 
 	*sipgo.DialogServerSession
-
-	done chan struct{}
 }
 
-func (d *DialogServerSession) Done() <-chan struct{} {
-	return d.done
+func (d *DialogServerSession) Close() error {
+	defer d.MediaSession.Close()
+	return d.DialogServerSession.Close()
 }
 
 // Hangup is alias for Bye
@@ -24,7 +23,7 @@ func (d *DialogServerSession) Hangup(ctx context.Context) error {
 	return d.Bye(ctx)
 }
 func (d *DialogServerSession) Bye(ctx context.Context) error {
-	defer close(d.done)
+	// defer close(d.done)
 	defer d.MediaSession.Close()
 	return d.DialogServerSession.Bye(ctx)
 }

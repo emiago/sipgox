@@ -13,24 +13,11 @@ type DialogClientSession struct {
 	*MediaSession
 
 	*sipgo.DialogClientSession
-
-	done chan struct{}
 }
 
-// func (d *DialogClientSession) Close() error {
-// 	select {
-// 	case <-d.done:
-// 		d.MediaSession.Close()
-// 	default:
-// 		// In case running session than do try sending hangup
-// 		ctx, _ := context.WithTimeout(context.Background(), 2*time.Second)
-// 		return d.Bye(ctx)
-// 	}
-// 	return nil
-// }
-
-func (d *DialogClientSession) Done() <-chan struct{} {
-	return d.done
+func (d *DialogClientSession) Close() error {
+	defer d.MediaSession.Close()
+	return d.DialogClientSession.Close()
 }
 
 // Hangup is alias for Bye
@@ -38,7 +25,7 @@ func (d *DialogClientSession) Hangup(ctx context.Context) error {
 	return d.Bye(ctx)
 }
 func (d *DialogClientSession) Bye(ctx context.Context) error {
-	defer close(d.done)
+	// defer close(d.done)
 	defer d.MediaSession.Close()
 	return d.DialogClientSession.Bye(ctx)
 }

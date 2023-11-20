@@ -413,7 +413,6 @@ func (p *Phone) Dial(dialCtx context.Context, recipient sip.Uri, o DialOptions) 
 	return &DialogClientSession{
 		MediaSession:        msess,
 		DialogClientSession: dialog,
-		done:                dialogCh,
 	}, nil
 }
 
@@ -597,7 +596,7 @@ func (p *Phone) Answer(ansCtx context.Context, opts AnswerOptions) (*DialogServe
 
 				d = &DialogServerSession{
 					DialogServerSession: dialog,
-					done:                make(chan struct{}),
+					// done:                make(chan struct{}),
 				}
 				select {
 				case <-tx.Done():
@@ -681,7 +680,7 @@ func (p *Phone) Answer(ansCtx context.Context, opts AnswerOptions) (*DialogServe
 			d = &DialogServerSession{
 				DialogServerSession: dialog,
 				MediaSession:        msess,
-				done:                make(chan struct{}),
+				// done:                make(chan struct{}),
 			}
 
 			if err := dialog.WriteResponse(res); err != nil {
@@ -758,11 +757,11 @@ func (p *Phone) Answer(ansCtx context.Context, opts AnswerOptions) (*DialogServe
 
 		stopAnswer() // This will close listener
 
-		// Close dialog as well
-		if d != nil {
-			close(d.done)
-			d = nil
-		}
+		// // Close dialog as well
+		// if d != nil {
+		// 	close(d.done)
+		// 	d = nil
+		// }
 	})
 
 	for _, l := range listeners {
@@ -807,8 +806,12 @@ func (p *Phone) AnswerWithCode(ansCtx context.Context, code sip.StatusCode, reas
 	if err != nil {
 		return nil, err
 	}
-	close(dialog.done)
-	return dialog, err
+
+	if !dialog.InviteResponse.IsSuccess() {
+		return dialog, dialog.Close()
+	}
+	// Return closed/terminated dialog
+	return dialog, nil
 }
 
 func (p *Phone) generateSDP(rtpPort int, f Formats) []byte {
@@ -845,8 +848,8 @@ func digestTransactionRequest(client *sipgo.Client, username string, password st
 
 	// Reply with digest
 	cred, err := digest.Digest(chal, digest.Options{
-		Method: req.Method.String(),
-		// URI:      req.Recipient.Addr(),
+		Method:   req.Method.String(),
+		URI:      req.Recipient.Addr(),
 		Username: username,
 		Password: password,
 	})

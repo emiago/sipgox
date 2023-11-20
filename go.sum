@@ -11,6 +11,8 @@ github.com/emiago/sipgo v0.14.1-0.20231026213527-9495e705942b h1:pKW/XWAig2VYQus
 github.com/emiago/sipgo v0.14.1-0.20231026213527-9495e705942b/go.mod h1:L81oe7msujAXpnspKdwMHLSNqKXjJp1dyNWGu/Q8oXg=
 github.com/emiago/sipgo v0.15.1-0.20231112221445-af1b6416b599 h1:KV1RB2y4o6UVzap3UngH5UWjbhfyQ3RpmCUS5WhlANQ=
 github.com/emiago/sipgo v0.15.1-0.20231112221445-af1b6416b599/go.mod h1:Kq302YJaJx1kD3MEa30Y5zcQmcLcGi+3qIl1eGuzB8g=
+github.com/emiago/sipgo v0.15.1-0.20231118142402-43fcc4f1fbff h1:0Uw5hVf1zYT9E65AeVf2mrv7zoU9YCdYfOKRAczF9Bw=
+github.com/emiago/sipgo v0.15.1-0.20231118142402-43fcc4f1fbff/go.mod h1:Kq302YJaJx1kD3MEa30Y5zcQmcLcGi+3qIl1eGuzB8g=
 github.com/gobwas/httphead v0.1.0 h1:exrUm0f4YX0L7EBwZHuCF4GDp8aJfVeBrlLQrs6NqWU=
 github.com/gobwas/httphead v0.1.0/go.mod h1:O/RXo79gxV8G+RqlR/otEwx4Q36zl9rqC5u12GKvMCM=
 github.com/gobwas/pool v0.2.1 h1:xfeeEhW7pwmX8nuLVlqbzVc7udMDrwetjEv+TZIz1og=
