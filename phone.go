@@ -9,7 +9,6 @@ import (
 	"math/rand"
 	"net"
 	"strconv"
-	"syscall"
 	"time"
 
 	"github.com/emiago/sipgo"
@@ -342,10 +341,14 @@ func (p *Phone) Dial(dialCtx context.Context, recipient sip.Uri, o DialOptions) 
 	})
 
 	// TODO setup session before
-	rtpPort := rand.Intn(1000*2)/2 + 6000
+	ip := p.ua.GetIP()
+	msess, err := NewMediaSession(&net.UDPAddr{IP: ip, Port: 0}, nil)
+	if err != nil {
+		return nil, err
+	}
 
 	// Create Generic SDP
-	sdpSend := p.generateSDP(rtpPort, o.Formats)
+	sdpSend := msess.localSDP(o.Formats)
 
 	// Creating INVITE
 	req := sip.NewRequest(sip.INVITE, &recipient)
@@ -355,7 +358,7 @@ func (p *Phone) Dial(dialCtx context.Context, recipient sip.Uri, o DialOptions) 
 
 	// Add custom headers
 	for _, h := range o.SipHeaders {
-		log.Info().Str(h.Name(), h.Value()).Msg("Adding SIP header")
+		p.log.Info().Str(h.Name(), h.Value()).Msg("Adding SIP header")
 		req.AppendHeader(h)
 	}
 
@@ -394,16 +397,18 @@ func (p *Phone) Dial(dialCtx context.Context, recipient sip.Uri, o DialOptions) 
 		Str("duration", time.Since(waitStart).String()).
 		Msg("Call answered")
 
-		// Setup media
-	msess, err := NewMediaSessionFromSDP(sdpSend, r.Body())
+	// Setup media
+	err = msess.remoteSDP(r.Body())
 	// TODO handle bad SDP
 	if err != nil {
 		return nil, err
 	}
 
-	if err := msess.Listen(); err != nil {
-		return nil, fmt.Errorf("Fail to open media connection: %w", err)
-	}
+	p.log.Info().
+		Ints("formats", msess.Formats).
+		Str("localAddr", msess.Laddr.String()).
+		Str("remoteAddr", msess.Raddr.String()).
+		Msg("Media/RTP session created")
 
 	// Send ACK
 	if err := dialog.Ack(ctx); err != nil {
@@ -642,29 +647,33 @@ func (p *Phone) Answer(ansCtx context.Context, opts AnswerOptions) (*DialogServe
 
 			// Setup media
 			msess, answerSD, err := func() (*MediaSession, []byte, error) {
-				for {
-					// Now generate answer with our rtp ports
-					rtpPort := rand.Intn(1000*2)/2 + 6000
-					answerSD := p.generateSDP(rtpPort, opts.Formats)
-
-					// TODO in order to support SDP updates for formats
-					msess, err := NewMediaSessionFromSDP(answerSD, req.Body())
-					if err != nil {
-						return nil, nil, err
-					}
-
-					err = msess.Dial()
-					if errors.Is(err, syscall.EADDRINUSE) {
-						continue
-					}
-					return msess, answerSD, err
+				// for {
+				// Now generate answer with our rtp ports
+				ip := p.ua.GetIP()
+				// rtpPort := rand.Intn(1000*2)/2 + 6000
+				msess, err := NewMediaSession(&net.UDPAddr{IP: ip, Port: 0}, nil)
+				if err != nil {
+					return nil, nil, err
 				}
+
+				err = msess.remoteSDP(req.Body())
+				if err != nil {
+					return nil, nil, err
+				}
+
+				answerSD := msess.localSDP(opts.Formats)
+				return msess, answerSD, err
 			}()
 
 			if err != nil {
 				return fmt.Errorf("Fail to setup media session: %w", err)
 			}
-			p.log.Info().Ints("formats", msess.Formats).Msg("Media session created")
+
+			p.log.Info().
+				Ints("formats", msess.Formats).
+				Str("localAddr", msess.Laddr.String()).
+				Str("remoteAddr", msess.Raddr.String()).
+				Msg("Media/RTP session created")
 
 			res := sip.NewSDPResponseFromRequest(req, answerSD)
 			// via, _ := res.Via()
@@ -814,8 +823,7 @@ func (p *Phone) AnswerWithCode(ansCtx context.Context, code sip.StatusCode, reas
 	return dialog, nil
 }
 
-func (p *Phone) generateSDP(rtpPort int, f Formats) []byte {
-	ip := p.ua.GetIP()
+func (p *Phone) generateSDP(ip net.IP, rtpPort int, f Formats) []byte {
 	if !f.Alaw && !f.Ulaw {
 		f = Formats{
 			Ulaw: true, // Enable only ulaw
