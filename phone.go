@@ -401,7 +401,7 @@ func (p *Phone) Dial(dialCtx context.Context, recipient sip.Uri, o DialOptions) 
 		return nil, err
 	}
 
-	if err := msess.Dial(); err != nil {
+	if err := msess.Listen(); err != nil {
 		return nil, fmt.Errorf("Fail to open media connection: %w", err)
 	}
 

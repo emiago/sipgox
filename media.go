@@ -16,8 +16,11 @@ type MediaSession struct {
 	Raddr   *net.UDPAddr
 	Laddr   *net.UDPAddr
 
-	rtpConn  net.Conn
-	rtcpConn net.Conn
+	rtpConn  net.PacketConn
+	rtcpConn net.PacketConn
+
+	rtpConnectedConn  net.Conn
+	rtcpConnectedConn net.Conn
 
 	Formats []int // For now can be set depending on SDP exchange
 }
@@ -127,12 +130,11 @@ func (s *MediaSession) Dial() error {
 	}
 	// RTP
 	// rtpladdr, _ := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", ip.String(), rtpPort))
-	conn, err := dialerRTP.Dial("udp", raddr.String())
+	s.rtpConnectedConn, err = dialerRTP.Dial("udp", raddr.String())
 	if err != nil {
 		return err
 	}
 
-	s.rtpConn = conn
 	// s.rtpConn, err = net.ListenUDP("udp", rtpladdr)
 	// if err != nil {
 	// 	return nil, err
@@ -142,7 +144,7 @@ func (s *MediaSession) Dial() error {
 	// s.rtcpConn, err = net.ListenUDP("udp", rtcpladdr)
 	dstAddr := net.JoinHostPort(raddr.IP.String(), strconv.Itoa(raddr.Port+1))
 	// Check here is rtcp mux
-	s.rtcpConn, err = dialerRTCP.Dial("udp", dstAddr)
+	s.rtcpConnectedConn, err = dialerRTCP.Dial("udp", dstAddr)
 	if err != nil {
 		return err
 	}
@@ -155,11 +157,10 @@ func (s *MediaSession) Listen() error {
 	laddr := s.Laddr
 	var err error
 
-	rtpU, err := net.ListenUDP("udp", &net.UDPAddr{IP: laddr.IP, Port: laddr.Port})
+	s.rtpConn, err = net.ListenUDP("udp", &net.UDPAddr{IP: laddr.IP, Port: laddr.Port})
 	if err != nil {
 		return err
 	}
-	s.rtpConn = rtpU
 
 	s.rtcpConn, err = net.ListenUDP("udp", &net.UDPAddr{IP: laddr.IP, Port: laddr.Port + 1})
 	if err != nil {
@@ -224,7 +225,11 @@ func (m *MediaSession) ReadRTPWithDeadline(t time.Time) (rtp.Packet, error) {
 }
 
 func (m *MediaSession) ReadRTPRaw(buf []byte) (int, error) {
-	n, err := m.rtpConn.Read(buf)
+	if m.rtpConnectedConn != nil {
+		return m.rtpConnectedConn.Read(buf)
+	}
+
+	n, _, err := m.rtpConn.ReadFrom(buf)
 	return n, err
 }
 
@@ -240,11 +245,17 @@ func (m *MediaSession) ReadRTCP() ([]rtcp.Packet, error) {
 }
 
 func (m *MediaSession) ReadRTCPRaw(buf []byte) (int, error) {
+	if m.rtcpConnectedConn != nil {
+		return m.rtcpConnectedConn.Read(buf)
+	}
+
 	if m.rtcpConn == nil {
 		// just block
 		select {}
 	}
-	return m.rtcpConn.Read(buf)
+	n, _, err := m.rtcpConn.ReadFrom(buf)
+
+	return n, err
 }
 
 func (m *MediaSession) WriteRTP(p *rtp.Packet) error {
@@ -253,8 +264,13 @@ func (m *MediaSession) WriteRTP(p *rtp.Packet) error {
 		return err
 	}
 
-	// n, err := m.rtpConn.WriteTo(data, m.Dst)
-	n, err := m.rtpConn.Write(data)
+	var n int
+	if m.rtpConnectedConn != nil {
+		n, err = m.rtpConnectedConn.Write(data)
+	} else {
+		n, err = m.rtpConn.WriteTo(data, m.Raddr)
+	}
+
 	if err != nil {
 		return err
 	}
@@ -271,8 +287,12 @@ func (m *MediaSession) WriteRTCP(p rtcp.Packet) error {
 		return err
 	}
 
-	// n, err := m.rtcpConn.WriteTo(data, m.Dst)
-	n, err := m.rtcpConn.Write(data)
+	var n int
+	if m.rtcpConnectedConn != nil {
+		n, err = m.rtcpConnectedConn.Write(data)
+	} else {
+		n, err = m.rtcpConn.WriteTo(data, m.Raddr)
+	}
 	if err != nil {
 		return err
 	}
