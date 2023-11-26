@@ -341,8 +341,8 @@ func (p *Phone) Dial(dialCtx context.Context, recipient sip.Uri, o DialOptions) 
 	})
 
 	// TODO setup session before
-	ip := p.ua.GetIP()
-	msess, err := NewMediaSession(&net.UDPAddr{IP: ip, Port: 0}, nil)
+	rtpIp := p.ua.GetIP()
+	msess, err := NewMediaSession(&net.UDPAddr{IP: rtpIp, Port: 0}, nil)
 	if err != nil {
 		return nil, err
 	}

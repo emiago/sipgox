@@ -137,13 +137,18 @@ func (s *MediaSession) localSDP(fs Formats) []byte {
 	}
 	s.updateFormats(formats)
 
+	// TODO remove this conversions
+	for _, f := range s.Formats {
+		if f == 0 {
+			fs.Ulaw = true
+		}
+		if f == 8 {
+			fs.Alaw = true
+		}
+	}
+
 	ip := s.Laddr.IP
 	rtpPort := s.Laddr.Port
-
-	for _, f := range s.Formats {
-		fs.Ulaw = f == 0
-		fs.Alaw = f == 8
-	}
 
 	return SDPGeneric(ip, ip, rtpPort, SDPModeSendrecv, fs)
 }
@@ -192,6 +197,12 @@ func (s *MediaSession) remoteSDP(sdpReceived []byte) error {
 
 	s.updateFormats(formats)
 
+	// if s.Raddr.IP.IsLoopback() {
+	// 	s.Laddr.IP = s.Raddr.IP
+	// 	s.Close()
+	// 	return s.listen()
+	// }
+
 	return nil
 }
 
@@ -214,41 +225,44 @@ func (s *MediaSession) updateFormats(formats []int) {
 }
 
 // Dial is setup connection for UDP, so it is more creating UPD listeners
-// func (s *MediaSession) Dial() error {
-// 	laddr, raddr := s.Laddr, s.Raddr
-// 	var err error
+func (s *MediaSession) dial() error {
+	laddr, raddr := s.Laddr, s.Raddr
+	var err error
 
-// 	dialerRTP := net.Dialer{
-// 		LocalAddr: laddr,
-// 	}
+	dialerRTP := net.Dialer{
+		LocalAddr: laddr,
+	}
 
-// 	dialerRTCP := net.Dialer{
-// 		// RTCP is always rtpPort + 1
-// 		LocalAddr: &net.UDPAddr{IP: laddr.IP, Port: laddr.Port + 1},
-// 	}
-// 	// RTP
-// 	// rtpladdr, _ := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", ip.String(), rtpPort))
-// 	s.rtpConnectedConn, err = dialerRTP.Dial("udp", raddr.String())
-// 	if err != nil {
-// 		return err
-// 	}
+	dialerRTCP := net.Dialer{
+		// RTCP is always rtpPort + 1
+		LocalAddr: &net.UDPAddr{IP: laddr.IP, Port: laddr.Port + 1},
+	}
+	// RTP
+	// rtpladdr, _ := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", ip.String(), rtpPort))
+	s.rtpConnectedConn, err = dialerRTP.Dial("udp", raddr.String())
+	if err != nil {
+		return err
+	}
 
-// 	// s.rtpConn, err = net.ListenUDP("udp", rtpladdr)
-// 	// if err != nil {
-// 	// 	return nil, err
-// 	// }
+	// s.rtpConn, err = net.ListenUDP("udp", rtpladdr)
+	// if err != nil {
+	// 	return nil, err
+	// }
 
-// 	// rtcpladdr, _ := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", ip.String(), rtpPort+1))
-// 	// s.rtcpConn, err = net.ListenUDP("udp", rtcpladdr)
-// 	dstAddr := net.JoinHostPort(raddr.IP.String(), strconv.Itoa(raddr.Port+1))
-// 	// Check here is rtcp mux
-// 	s.rtcpConnectedConn, err = dialerRTCP.Dial("udp", dstAddr)
-// 	if err != nil {
-// 		return err
-// 	}
+	// rtcpladdr, _ := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", ip.String(), rtpPort+1))
+	// s.rtcpConn, err = net.ListenUDP("udp", rtcpladdr)
+	dstAddr := net.JoinHostPort(raddr.IP.String(), strconv.Itoa(raddr.Port+1))
+	// Check here is rtcp mux
+	s.rtcpConnectedConn, err = dialerRTCP.Dial("udp", dstAddr)
+	if err != nil {
+		return err
+	}
 
-// 	return nil
-// }
+	// Update laddr as it can be empheral
+	laddr = s.rtpConnectedConn.LocalAddr().(*net.UDPAddr)
+	s.Laddr = laddr
+	return nil
+}
 
 // Listen creates listeners instead
 func (s *MediaSession) listen() error {
@@ -278,6 +292,14 @@ func (s *MediaSession) Close() {
 
 	if s.rtpConn != nil {
 		s.rtpConn.Close()
+	}
+
+	if s.rtcpConnectedConn != nil {
+		s.rtcpConnectedConn.Close()
+	}
+
+	if s.rtcpConnectedConn != nil {
+		s.rtcpConnectedConn.Close()
 	}
 }
 
