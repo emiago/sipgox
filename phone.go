@@ -9,6 +9,7 @@ import (
 	"math/rand"
 	"net"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/emiago/sipgo"
@@ -259,6 +260,107 @@ func (p *Phone) Register(ctx context.Context, recipient sip.Uri) error {
 	return nil
 }
 
+func (p *Phone) register(ctx context.Context, client *sipgo.Client, recipient sip.Uri, contact sip.ContactHeader, username string, password string, expiry int) (*sip.Request, error) {
+	log := p.log.With().Str("caller", "REGISTER").Logger()
+	req := sip.NewRequest(sip.REGISTER, &recipient)
+	// contact.Params["expires"] = strconv.Itoa(expiry)
+	req.AppendHeader(&contact)
+	expires := sip.ExpiresHeader(expiry)
+	req.AppendHeader(&expires)
+
+	// Send request and parse response
+	// req.SetDestination(*dst)
+	log.Info().Str("uri", req.Recipient.String()).Int("expiry", int(expiry)).Msg("sending request")
+	tx, err := client.TransactionRequest(ctx, req)
+	if err != nil {
+		return req, fmt.Errorf("fail to create transaction req=%q: %w", req.StartLine(), err)
+	}
+	defer tx.Terminate()
+
+	res, err := getResponse(ctx, tx)
+	if err != nil {
+		return req, fmt.Errorf("fail to get response req=%q : %w", req.StartLine(), err)
+	}
+
+	log.Info().Int("status", int(res.StatusCode)).Msg("Received status")
+	if res.StatusCode == sip.StatusUnauthorized {
+		tx.Terminate() //Terminate previous
+		log.Info().Msg("Unathorized. Doing digest auth")
+		tx, err = digestTransactionRequest(client, username, password, req, res)
+		if err != nil {
+			return req, err
+		}
+		defer tx.Terminate()
+
+		res, err = getResponse(ctx, tx)
+		if err != nil {
+			return req, fmt.Errorf("fail to get response req=%q : %w", req.StartLine(), err)
+		}
+		log.Info().Int("status", int(res.StatusCode)).Msg("Received status")
+	}
+
+	if res.StatusCode != 200 {
+		return req, fmt.Errorf("%s: %w", res.StartLine(), ErrRegisterFail)
+	}
+
+	return req, nil
+}
+
+func (p *Phone) unregister(ctx context.Context, client *sipgo.Client, req *sip.Request, username string, password string) error {
+	log := p.log.With().Str("caller", "UNREGISTER").Logger()
+	req.RemoveHeader("Expires")
+	req.RemoveHeader("Contact")
+	req.AppendHeader(sip.NewHeader("Contact", "*"))
+	expires := sip.ExpiresHeader(0)
+	req.AppendHeader(&expires)
+
+	log.Info().Str("uri", req.Recipient.String()).Msg("sending request")
+	return p.registerQualify(ctx, client, req, username, password)
+}
+
+func (p *Phone) registerQualify(ctx context.Context, client *sipgo.Client, req *sip.Request, username string, password string) error {
+	// Send request and parse response
+	// req.SetDestination(*dst)
+	req.RemoveHeader("Via")
+	tx, err := client.TransactionRequest(ctx, req)
+	if err != nil {
+		return fmt.Errorf("fail to create transaction req=%q: %w", req.StartLine(), err)
+	}
+	defer tx.Terminate()
+
+	res, err := getResponse(ctx, tx)
+	if err != nil {
+		return fmt.Errorf("fail to get response req=%q : %w", req.StartLine(), err)
+	}
+
+	log.Info().Int("status", int(res.StatusCode)).Msg("Received status")
+	if res.StatusCode == sip.StatusUnauthorized {
+		tx.Terminate() //Terminate previous
+		log.Info().Msg("Unathorized. Doing digest auth")
+		tx, err = digestTransactionRequest(client, username, password, req, res)
+		if err != nil {
+			return err
+		}
+		defer tx.Terminate()
+
+		res, err = getResponse(ctx, tx)
+		if err != nil {
+			return fmt.Errorf("fail to get response req=%q : %w", req.StartLine(), err)
+		}
+		log.Info().Int("status", int(res.StatusCode)).Msg("Received status")
+	}
+
+	if res.StatusCode != 200 {
+		return fmt.Errorf("%s: %w", res.StartLine(), ErrRegisterFail)
+	}
+
+	if res.StatusCode != 200 {
+		return fmt.Errorf("%s: %w", res.StartLine(), ErrRegisterFail)
+	}
+
+	return nil
+}
+
 type DialResponseError struct {
 	InviteReq  *sip.Request
 	InviteResp *sip.Response
@@ -432,10 +534,12 @@ type AnswerOptions struct {
 	Ringtime   time.Duration
 	SipHeaders []sip.Header
 
-	// For authorizing INVITE
+	// For authorizing INVITE unless RegisterAddr is defined
 	Username string
 	Password string
 	Realm    string //default sipgo
+
+	RegisterAddr string //If defined it will keep registration in background
 
 	// For SDP codec manipulating
 	Formats Formats
@@ -469,29 +573,78 @@ func (p *Phone) Answer(ansCtx context.Context, opts AnswerOptions) (*DialogServe
 
 	ctx, cancel := context.WithCancel(ansCtx)
 	var exitErr error
-	stopAnswer := func() {
+	stopAnswer := sync.OnceFunc(func() {
 		cancel() // Cancel context
 		for _, l := range listeners {
 			l.Close()
 		}
-	}
+	})
 
 	exitError := func(err error) {
 		exitErr = err
 	}
 
-	// Create client handle for responding
-	// It is hard here to force address in case multiple listeners
-	client, err := sipgo.NewClient(p.ua) // sipgo.WithClientHostname("127.0.0.100"),
-
 	lhost, lport, _ := sip.ParseAddr(listeners[0].Addr)
 	contactHdr := sip.ContactHeader{
 		Address: sip.Uri{
-			User:    p.ua.Name(),
-			Host:    lhost,
-			Port:    lport,
-			Headers: sip.HeaderParams{"transport": listeners[0].Network},
+			User:      p.ua.Name(),
+			Host:      lhost,
+			Port:      lport,
+			Headers:   sip.HeaderParams{"transport": listeners[0].Network},
+			UriParams: sip.NewParams(),
 		},
+		Params: sip.NewParams(),
+	}
+
+	// Create client handle for responding
+	// It is hard here to force address in case multiple listeners
+	client, _ := sipgo.NewClient(p.ua,
+		sipgo.WithClientPort(lport),
+	) // sipgo.WithClientHostname("127.0.0.100"),
+
+	if opts.RegisterAddr != "" {
+		// Keep registration
+		rhost, rport, _ := sip.ParseAddr(opts.RegisterAddr)
+		registerURI := sip.Uri{
+			Host: rhost,
+			Port: rport,
+			User: p.ua.Name(),
+		}
+
+		origStopAnswer := stopAnswer
+		go func(ctx context.Context) {
+			ticker := time.NewTicker(5 * time.Second)
+			regReq, err := p.register(ctx, client, registerURI, contactHdr, opts.Username, opts.Password, 30)
+			if err != nil {
+				exitError(err)
+				stopAnswer()
+				return
+			}
+
+			// Override stopAnswer with unregister
+			stopAnswer = sync.OnceFunc(func() {
+				err := p.unregister(context.TODO(), client, regReq, opts.Username, opts.Password)
+				if err != nil {
+					p.log.Error().Err(err).Msg("Fail to unregister")
+				}
+				regReq = nil
+				origStopAnswer()
+			})
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C: // TODO make configurable
+				}
+
+				p.registerQualify(ctx, client, regReq, opts.Username, opts.Password)
+				if err != nil {
+					exitError(err)
+					stopAnswer()
+					return
+				}
+			}
+		}(ctx)
 	}
 
 	ds := sipgo.NewDialogServer(client, contactHdr)
@@ -523,7 +676,11 @@ func (p *Phone) Answer(ansCtx context.Context, opts AnswerOptions) (*DialogServe
 			return
 		}
 
-		if opts.Password != "" {
+		// We authorize request if password provided and no register addr defined
+		// Use cases:
+		// 1. INVITE auth like registrar before processing INVITE
+		// 2. Auto answering client which keeps registration and accepts calls
+		if opts.Password != "" && opts.RegisterAddr == "" {
 			// https://www.rfc-editor.org/rfc/rfc2617#page-6
 			h := req.GetHeader("Authorization")
 
