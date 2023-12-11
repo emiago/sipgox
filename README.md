@@ -12,12 +12,14 @@ Tools using this lib:
 - [sipgo-tools](https://github.com/emiago/sipgo-tools)
 
 Features:
-- [x] Simple dial answer register
-- [x] Dialog setup and small SDP 
+- [x] Simple API for UA/phone build with dial answer register actions
+- [x] Dialog setup and small SDP with alaw and ulaw codec
 - [x] RTP/RTCP receiving and logging
-- [x] Extendable MediaSession handling with interface
-- [x] Hangup
+- [x] Extendable MediaSession handling for RTP/RTCP handling (ex microphone,speaker)
+- [x] Hangup control on caller
 - [x] Timeouts handling
+- [x] Digest auth
+- [ ] Transfers on answer, dial
 - [ ] SDP codec fields manipulating
 - [ ] SDP negotiation fail
 - [ ] DTMF passing
