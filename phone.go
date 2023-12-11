@@ -9,6 +9,7 @@ import (
 	"math/rand"
 	"net"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -260,13 +261,26 @@ func (p *Phone) Register(ctx context.Context, recipient sip.Uri) error {
 	return nil
 }
 
-func (p *Phone) register(ctx context.Context, client *sipgo.Client, recipient sip.Uri, contact sip.ContactHeader, username string, password string, expiry int) (*sip.Request, error) {
+type registerOpts struct {
+	Username     string
+	Password     string
+	Expiry       int
+	AllowHeaders []string
+}
+
+func (p *Phone) register(ctx context.Context, client *sipgo.Client, recipient sip.Uri, contact sip.ContactHeader, opts registerOpts) (*sip.Request, error) {
+	username, password, expiry, allowHDRS := opts.Username, opts.Password, opts.Expiry, opts.AllowHeaders
+
 	log := p.log.With().Str("caller", "REGISTER").Logger()
 	req := sip.NewRequest(sip.REGISTER, &recipient)
 	// contact.Params["expires"] = strconv.Itoa(expiry)
 	req.AppendHeader(&contact)
 	expires := sip.ExpiresHeader(expiry)
 	req.AppendHeader(&expires)
+
+	if allowHDRS != nil {
+		req.AppendHeader(sip.NewHeader("Allow", strings.Join(allowHDRS, ", ")))
+	}
 
 	// Send request and parse response
 	// req.SetDestination(*dst)
@@ -602,51 +616,6 @@ func (p *Phone) Answer(ansCtx context.Context, opts AnswerOptions) (*DialogServe
 		sipgo.WithClientPort(lport),
 	) // sipgo.WithClientHostname("127.0.0.100"),
 
-	if opts.RegisterAddr != "" {
-		// Keep registration
-		rhost, rport, _ := sip.ParseAddr(opts.RegisterAddr)
-		registerURI := sip.Uri{
-			Host: rhost,
-			Port: rport,
-			User: p.ua.Name(),
-		}
-
-		origStopAnswer := stopAnswer
-		go func(ctx context.Context) {
-			ticker := time.NewTicker(5 * time.Second)
-			regReq, err := p.register(ctx, client, registerURI, contactHdr, opts.Username, opts.Password, 30)
-			if err != nil {
-				exitError(err)
-				stopAnswer()
-				return
-			}
-
-			// Override stopAnswer with unregister
-			stopAnswer = sync.OnceFunc(func() {
-				err := p.unregister(context.TODO(), client, regReq, opts.Username, opts.Password)
-				if err != nil {
-					p.log.Error().Err(err).Msg("Fail to unregister")
-				}
-				regReq = nil
-				origStopAnswer()
-			})
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case <-ticker.C: // TODO make configurable
-				}
-
-				p.registerQualify(ctx, client, regReq, opts.Username, opts.Password)
-				if err != nil {
-					exitError(err)
-					stopAnswer()
-					return
-				}
-			}
-		}(ctx)
-	}
-
 	ds := sipgo.NewDialogServer(client, contactHdr)
 
 	var chal *digest.Challenge
@@ -929,6 +898,61 @@ func (p *Phone) Answer(ansCtx context.Context, opts AnswerOptions) (*DialogServe
 		// 	d = nil
 		// }
 	})
+
+	server.OnOptions(func(req *sip.Request, tx sip.ServerTransaction) {
+		res := sip.NewResponseFromRequest(req, 200, "OK", nil)
+		tx.Respond(res)
+	})
+
+	if opts.RegisterAddr != "" {
+		// Keep registration
+		rhost, rport, _ := sip.ParseAddr(opts.RegisterAddr)
+		registerURI := sip.Uri{
+			Host: rhost,
+			Port: rport,
+			User: p.ua.Name(),
+		}
+
+		origStopAnswer := stopAnswer
+		go func(ctx context.Context) {
+			ticker := time.NewTicker(30 * time.Second)
+			regReq, err := p.register(ctx, client, registerURI, contactHdr, registerOpts{
+				Username:     opts.Username,
+				Password:     opts.Password,
+				Expiry:       30,
+				AllowHeaders: server.RegisteredMethods(),
+			})
+			if err != nil {
+				exitError(err)
+				stopAnswer()
+				return
+			}
+
+			// Override stopAnswer with unregister
+			stopAnswer = sync.OnceFunc(func() {
+				err := p.unregister(context.TODO(), client, regReq, opts.Username, opts.Password)
+				if err != nil {
+					p.log.Error().Err(err).Msg("Fail to unregister")
+				}
+				regReq = nil
+				origStopAnswer()
+			})
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C: // TODO make configurable
+				}
+
+				p.registerQualify(ctx, client, regReq, opts.Username, opts.Password)
+				if err != nil {
+					exitError(err)
+					stopAnswer()
+					return
+				}
+			}
+		}(ctx)
+	}
 
 	for _, l := range listeners {
 		p.log.Info().Str("network", l.Network).Str("addr", l.Addr).Msg("Listening on")
