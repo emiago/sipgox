@@ -294,7 +294,7 @@ func (p *Phone) register(ctx context.Context, client *sipgo.Client, recipient si
 		return req, fmt.Errorf("fail to get response req=%q : %w", req.StartLine(), err)
 	}
 
-	via, _ := res.Via()
+	via := res.Via()
 	if via == nil {
 		return nil, fmt.Errorf("No Via header in response")
 	}
@@ -497,13 +497,17 @@ func (p *Phone) Dial(dialCtx context.Context, recipient sip.Uri, o DialOptions) 
 		req.AppendHeader(h)
 	}
 
-	// Wait 200
 	waitStart := time.Now()
 	dialog, err := dc.WriteInvite(ctx, req)
 	if err != nil {
 		return nil, err
 	}
 
+	p.log.Info().
+		Str("Call-ID", req.CallID().Value()).
+		Msg("Wrote INVITE")
+
+	// Wait 200
 	err = dialog.WaitAnswer(ctx, sipgo.AnswerOptions{
 		OnResponse: func(res *sip.Response) {
 			p.log.Info().Msgf("Response: %s", res.StartLine())
@@ -657,7 +661,7 @@ func (p *Phone) Answer(ansCtx context.Context, opts AnswerOptions) (*DialogServe
 		}
 
 		// In case our register changed contact due to NAT detection via rport, lets update
-		contact, _ := regReq.Contact()
+		contact := regReq.Contact()
 		contactHdr = *contact.Clone()
 
 		origStopAnswer := stopAnswer
@@ -779,7 +783,7 @@ func (p *Phone) Answer(ansCtx context.Context, opts AnswerOptions) (*DialogServe
 			log.Info().Str("username", cred.Username).Str("source", req.Source()).Msg("INVITE authorized")
 		}
 
-		from, _ := req.From()
+		from := req.From()
 		p.log.Info().Str("from", from.Address.Addr()).Str("name", from.DisplayName).Msg("Received call")
 
 		err := func() error {
@@ -1069,7 +1073,7 @@ func digestTransactionRequest(client *sipgo.Client, username string, password st
 		return nil, fmt.Errorf("fail to build digest: %w", err)
 	}
 
-	cseq, _ := req.CSeq()
+	cseq := req.CSeq()
 	cseq.SeqNo++
 	// newReq := req.Clone()
 
