@@ -3,7 +3,7 @@ module github.com/emiago/sipgox
 go 1.20
 
 require (
-	github.com/emiago/sipgo v0.16.1-0.20240102130530-ebc122a68827
+	github.com/emiago/sipgo v0.16.1-0.20240102174224-9a7685649118
 	github.com/icholy/digest v0.1.22
 	github.com/pion/rtcp v1.2.10
 	github.com/pion/rtp v1.8.2
