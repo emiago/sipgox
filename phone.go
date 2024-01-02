@@ -20,6 +20,10 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+var (
+	ContextLoggerKey = "logger"
+)
+
 type Phone struct {
 	ua *sipgo.UserAgent
 	// c  *sipgo.Client
@@ -81,6 +85,17 @@ func NewPhone(ua *sipgo.UserAgent, options ...PhoneOption) *Phone {
 }
 
 func (p *Phone) Close() {
+}
+
+func (p *Phone) getLoggerCtx(ctx context.Context, caller string) zerolog.Logger {
+	l := ctx.Value(ContextLoggerKey)
+	if l != nil {
+		log, ok := l.(zerolog.Logger)
+		if ok {
+			return log
+		}
+	}
+	return p.log.With().Str("caller", caller).Logger()
 }
 
 func (p *Phone) getInterfaceAddr(network string, targetAddr string) (addr string, err error) {
@@ -172,9 +187,6 @@ func (p *Phone) createServerListeners(s *sipgo.Server) (listeners []*Listener, e
 			return err
 		}
 
-		// p.log.Info().Str("addr", a.Addr).Str("network", a.Network).Msg("Listening on")
-		// go l.Listen()
-
 		listeners = append(listeners, l)
 		return nil
 	}
@@ -243,7 +255,7 @@ func (p *Phone) Register(ctx context.Context, recipient sip.Uri, opts RegisterOp
 	defer func() {
 		err := p.unregister(context.TODO(), client, regReq, opts.Username, opts.Password)
 		if err != nil {
-			p.log.Error().Err(err).Msg("Fail to unregister")
+			log.Error().Err(err).Msg("Fail to unregister")
 		}
 	}()
 
@@ -269,8 +281,7 @@ type registerOpts struct {
 
 func (p *Phone) register(ctx context.Context, client *sipgo.Client, recipient sip.Uri, contact sip.ContactHeader, opts registerOpts) (*sip.Request, error) {
 	username, password, expiry, allowHDRS := opts.Username, opts.Password, opts.Expiry, opts.AllowHeaders
-
-	log := p.log.With().Str("caller", "REGISTER").Logger()
+	log := p.getLoggerCtx(ctx, "Register")
 
 	req := sip.NewRequest(sip.REGISTER, &recipient)
 	req.AppendHeader(&contact)
@@ -339,7 +350,7 @@ func (p *Phone) register(ctx context.Context, client *sipgo.Client, recipient si
 }
 
 func (p *Phone) unregister(ctx context.Context, client *sipgo.Client, req *sip.Request, username string, password string) error {
-	log := p.log.With().Str("caller", "UNREGISTER").Logger()
+	log := p.getLoggerCtx(ctx, "Unregister")
 	req.RemoveHeader("Expires")
 	req.RemoveHeader("Contact")
 	req.AppendHeader(sip.NewHeader("Contact", "*"))
@@ -351,7 +362,8 @@ func (p *Phone) unregister(ctx context.Context, client *sipgo.Client, req *sip.R
 }
 
 func (p *Phone) registerQualify(ctx context.Context, client *sipgo.Client, req *sip.Request, username string, password string) error {
-	log := p.log.With().Str("caller", "REGISTER").Logger()
+	log := p.getLoggerCtx(ctx, "Register")
+
 	// Send request and parse response
 	// req.SetDestination(*dst)
 	req.RemoveHeader("Via")
@@ -424,7 +436,7 @@ type DialOptions struct {
 //
 // return DialResponseError in case non 200 responses
 func (p *Phone) Dial(dialCtx context.Context, recipient sip.Uri, o DialOptions) (*DialogClientSession, error) {
-	// ip := p.ua.GetIP()
+	log := p.getLoggerCtx(dialCtx, "Dial")
 	ctx, _ := context.WithCancel(dialCtx)
 	// defer cancel()
 
@@ -469,10 +481,10 @@ func (p *Phone) Dial(dialCtx context.Context, recipient sip.Uri, o DialOptions) 
 	server.OnBye(func(req *sip.Request, tx sip.ServerTransaction) {
 		close(dialogCh)
 		if err := dc.ReadBye(req, tx); err != nil {
-			p.log.Error().Err(err).Msg("Fail to setup client handle")
+			log.Error().Err(err).Msg("Fail to setup client handle")
 			return
 		}
-		p.log.Debug().Msg("Received BYE")
+		log.Debug().Msg("Received BYE")
 	})
 
 	// TODO setup session before
@@ -493,7 +505,7 @@ func (p *Phone) Dial(dialCtx context.Context, recipient sip.Uri, o DialOptions) 
 
 	// Add custom headers
 	for _, h := range o.SipHeaders {
-		p.log.Info().Str(h.Name(), h.Value()).Msg("Adding SIP header")
+		log.Info().Str(h.Name(), h.Value()).Msg("Adding SIP header")
 		req.AppendHeader(h)
 	}
 
@@ -503,14 +515,16 @@ func (p *Phone) Dial(dialCtx context.Context, recipient sip.Uri, o DialOptions) 
 		return nil, err
 	}
 
-	p.log.Info().
+	log.Info().
 		Str("Call-ID", req.CallID().Value()).
-		Msg("Wrote INVITE")
+		Str("FromAddr", req.From().Address.Addr()).
+		Str("ToAddr", req.To().Address.Addr()).
+		Msg("INVITE")
 
 	// Wait 200
 	err = dialog.WaitAnswer(ctx, sipgo.AnswerOptions{
 		OnResponse: func(res *sip.Response) {
-			p.log.Info().Msgf("Response: %s", res.StartLine())
+			log.Info().Msgf("Response: %s", res.StartLine())
 		},
 		Username: o.Username,
 		Password: o.Password,
@@ -530,7 +544,7 @@ func (p *Phone) Dial(dialCtx context.Context, recipient sip.Uri, o DialOptions) 
 	}
 
 	r := dialog.InviteResponse
-	p.log.Info().
+	log.Info().
 		Int("code", int(r.StatusCode)).
 		Str("reason", r.Reason).
 		Str("duration", time.Since(waitStart).String()).
@@ -543,7 +557,7 @@ func (p *Phone) Dial(dialCtx context.Context, recipient sip.Uri, o DialOptions) 
 		return nil, err
 	}
 
-	p.log.Info().
+	log.Info().
 		Ints("formats", msess.Formats).
 		Str("localAddr", msess.Laddr.String()).
 		Str("remoteAddr", msess.Raddr.String()).
@@ -590,6 +604,7 @@ type AnswerOptions struct {
 // Closing ansCtx will close listeners or it will be closed on BYE
 // TODO: reusing listener
 func (p *Phone) Answer(ansCtx context.Context, opts AnswerOptions) (*DialogServerSession, error) {
+	log := p.getLoggerCtx(ansCtx, "Answer")
 	ringtime := opts.Ringtime
 
 	waitDialog := make(chan *DialogServerSession)
@@ -672,7 +687,7 @@ func (p *Phone) Answer(ansCtx context.Context, opts AnswerOptions) (*DialogServe
 			stopAnswer = sync.OnceFunc(func() {
 				err := p.unregister(context.TODO(), client, regReq, opts.Username, opts.Password)
 				if err != nil {
-					p.log.Error().Err(err).Msg("Fail to unregister")
+					log.Error().Err(err).Msg("Fail to unregister")
 				}
 				regReq = nil
 				origStopAnswer()
@@ -705,7 +720,7 @@ func (p *Phone) Answer(ansCtx context.Context, opts AnswerOptions) (*DialogServe
 				if err := d.MediaSession.UpdateDestinationSDP(req.Body()); err != nil {
 					res := sip.NewResponseFromRequest(req, 400, err.Error(), nil)
 					if err := tx.Respond(res); err != nil {
-						p.log.Error().Err(err).Msg("Fail to send 400")
+						log.Error().Err(err).Msg("Fail to send 400")
 						return
 					}
 					return
@@ -713,12 +728,12 @@ func (p *Phone) Answer(ansCtx context.Context, opts AnswerOptions) (*DialogServe
 
 				res := sip.NewResponseFromRequest(req, 200, "OK", nil)
 				if err := tx.Respond(res); err != nil {
-					p.log.Error().Err(err).Msg("Fail to send 200")
+					log.Error().Err(err).Msg("Fail to send 200")
 					return
 				}
 				return
 			}
-			p.log.Error().Msg("Received second INVITE is not yet supported")
+			log.Error().Msg("Received second INVITE is not yet supported")
 			return
 		}
 
@@ -784,14 +799,14 @@ func (p *Phone) Answer(ansCtx context.Context, opts AnswerOptions) (*DialogServe
 		}
 
 		from := req.From()
-		p.log.Info().Str("from", from.Address.Addr()).Str("name", from.DisplayName).Msg("Received call")
+		log.Info().Str("from", from.Address.Addr()).Str("name", from.DisplayName).Msg("Received call")
 
 		err := func() error {
 			dialog, err := ds.ReadInvite(req, tx)
 			if err != nil {
 				res := sip.NewResponseFromRequest(req, 400, err.Error(), nil)
 				if err := tx.Respond(res); err != nil {
-					p.log.Error().Err(err).Msg("Failed to send 400 response")
+					log.Error().Err(err).Msg("Failed to send 400 response")
 				}
 				return err
 			}
@@ -826,7 +841,7 @@ func (p *Phone) Answer(ansCtx context.Context, opts AnswerOptions) (*DialogServe
 				if err := dialog.WriteResponse(res); err != nil {
 					return fmt.Errorf("failed to send 180 response: %w", err)
 				}
-				p.log.Info().Msgf("Response: %s", res.StartLine())
+				log.Info().Msgf("Response: %s", res.StartLine())
 
 				select {
 				case <-tx.Cancels():
@@ -845,7 +860,7 @@ func (p *Phone) Answer(ansCtx context.Context, opts AnswerOptions) (*DialogServe
 					return fmt.Errorf("Fail to send 100 response: %w", err)
 				}
 
-				p.log.Info().Msgf("Response: %s", res.StartLine())
+				log.Info().Msgf("Response: %s", res.StartLine())
 			}
 
 			// Setup media
@@ -872,7 +887,7 @@ func (p *Phone) Answer(ansCtx context.Context, opts AnswerOptions) (*DialogServe
 				return fmt.Errorf("Fail to setup media session: %w", err)
 			}
 
-			p.log.Info().
+			log.Info().
 				Ints("formats", msess.Formats).
 				Str("localAddr", msess.Laddr.String()).
 				Str("remoteAddr", msess.Raddr.String()).
@@ -899,7 +914,7 @@ func (p *Phone) Answer(ansCtx context.Context, opts AnswerOptions) (*DialogServe
 				d = nil
 				return fmt.Errorf("Fail to send 200 response: %w", err)
 			}
-			p.log.Info().Msgf("Response: %s", res.StartLine())
+			log.Info().Msgf("Response: %s", res.StartLine())
 
 			// FOR ASTERISK YOU NEED TO REPLY WITH SAME RECIPIENT
 			// IN CASE PROXY AND IN DIALOG handling this must be contact address -.-
@@ -982,7 +997,7 @@ func (p *Phone) Answer(ansCtx context.Context, opts AnswerOptions) (*DialogServe
 	})
 
 	for _, l := range listeners {
-		p.log.Info().Str("network", l.Network).Str("addr", l.Addr).Msg("Listening on")
+		log.Info().Str("network", l.Network).Str("addr", l.Addr).Msg("Listening on")
 		go l.Listen()
 	}
 
@@ -990,6 +1005,7 @@ func (p *Phone) Answer(ansCtx context.Context, opts AnswerOptions) (*DialogServe
 		close(v.(AnswerReadyCtxValue))
 	}
 
+	log.Info().Msg("Waiting for INVITE...")
 	select {
 	case d = <-waitDialog:
 		// Make sure we have cleanup after dialog stop
