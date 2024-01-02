@@ -800,7 +800,7 @@ func (p *Phone) Answer(ansCtx context.Context, opts AnswerOptions) (*DialogServe
 		}
 
 		from := req.From()
-		log.Info().Str("from", from.Address.Addr()).Str("name", from.DisplayName).Msg("Received call")
+		log.Info().Str("Call-ID", req.CallID().Value()).Str("from", from.Value()).Msgf("Request: %s", req.StartLine())
 
 		err := func() error {
 			dialog, err := ds.ReadInvite(req, tx)
@@ -813,10 +813,12 @@ func (p *Phone) Answer(ansCtx context.Context, opts AnswerOptions) (*DialogServe
 			}
 
 			if opts.answerCode > 0 && opts.answerCode != sip.StatusOK {
+				log.Info().Int("code", int(opts.answerCode)).Msg("Answering call")
 				if err := dialog.Respond(opts.answerCode, opts.answerReason, nil); err != nil {
 					d = nil
 					return fmt.Errorf("Failed to respond custom status code %d: %w", int(opts.answerCode), err)
 				}
+				log.Info().Msgf("Response: %s", dialog.InviteResponse.StartLine())
 
 				d = &DialogServerSession{
 					DialogServerSession: dialog,
@@ -911,6 +913,7 @@ func (p *Phone) Answer(ansCtx context.Context, opts AnswerOptions) (*DialogServe
 				// done:                make(chan struct{}),
 			}
 
+			log.Info().Msg("Answering call")
 			if err := dialog.WriteResponse(res); err != nil {
 				d = nil
 				return fmt.Errorf("Fail to send 200 response: %w", err)
@@ -1044,6 +1047,7 @@ func (p *Phone) AnswerWithCode(ansCtx context.Context, code sip.StatusCode, reas
 	if !dialog.InviteResponse.IsSuccess() {
 		return dialog, dialog.Close()
 	}
+
 	// Return closed/terminated dialog
 	return dialog, nil
 }

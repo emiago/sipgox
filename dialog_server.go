@@ -14,8 +14,12 @@ type DialogServerSession struct {
 }
 
 func (d *DialogServerSession) Close() error {
-	defer d.MediaSession.Close()
-	return d.DialogServerSession.Close()
+	err := d.DialogServerSession.Close()
+
+	if d.MediaSession != nil {
+		d.MediaSession.Close()
+	}
+	return err
 }
 
 // Hangup is alias for Bye
