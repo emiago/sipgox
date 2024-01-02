@@ -20,15 +20,16 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// Phone is easy wrapper for creating phone like functionaliy
+// but actions are creating clients and servers on a fly so
+// it is not designed for long running apps
+
 var (
 	ContextLoggerKey = "logger"
 )
 
 type Phone struct {
 	ua *sipgo.UserAgent
-	// c  *sipgo.Client
-	// s *sipgo.Server
-
 	// listenAddrs is map of transport:addr which will phone use to listen incoming requests
 	listenAddrs []ListenAddr
 
@@ -517,9 +518,9 @@ func (p *Phone) Dial(dialCtx context.Context, recipient sip.Uri, o DialOptions) 
 
 	log.Info().
 		Str("Call-ID", req.CallID().Value()).
-		Str("FromAddr", req.From().Address.Addr()).
-		Str("ToAddr", req.To().Address.Addr()).
-		Msg("INVITE")
+		// Str("FromAddr", req.From().Address.Addr()).
+		// Str("ToAddr", req.To().Address.Addr()).
+		Msgf("Request: %s", req.StartLine())
 
 	// Wait 200
 	err = dialog.WaitAnswer(ctx, sipgo.AnswerOptions{
@@ -546,7 +547,7 @@ func (p *Phone) Dial(dialCtx context.Context, recipient sip.Uri, o DialOptions) 
 	r := dialog.InviteResponse
 	log.Info().
 		Int("code", int(r.StatusCode)).
-		Str("reason", r.Reason).
+		// Str("reason", r.Reason).
 		Str("duration", time.Since(waitStart).String()).
 		Msg("Call answered")
 
@@ -558,7 +559,7 @@ func (p *Phone) Dial(dialCtx context.Context, recipient sip.Uri, o DialOptions) 
 	}
 
 	log.Info().
-		Ints("formats", msess.Formats).
+		Str("formats", FormatsList(msess.Formats).String()).
 		Str("localAddr", msess.Laddr.String()).
 		Str("remoteAddr", msess.Raddr.String()).
 		Msg("Media/RTP session created")
