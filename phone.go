@@ -477,10 +477,8 @@ func (p *Phone) Dial(dialCtx context.Context, recipient sip.Uri, o DialOptions) 
 	}
 
 	dc := sipgo.NewDialogClient(client, contactHDR)
-	dialogCh := make(chan struct{})
 	// Setup srv for bye
 	server.OnBye(func(req *sip.Request, tx sip.ServerTransaction) {
-		close(dialogCh)
 		if err := dc.ReadBye(req, tx); err != nil {
 			log.Error().Err(err).Msg("Fail to setup client handle")
 			return
