@@ -25,6 +25,7 @@ import (
 // it is not designed for long running apps
 
 var (
+	// Value must be zerolog.Logger
 	ContextLoggerKey = "logger"
 )
 
