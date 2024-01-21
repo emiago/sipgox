@@ -488,7 +488,11 @@ func (p *Phone) Dial(dialCtx context.Context, recipient sip.Uri, o DialOptions) 
 	})
 
 	// TODO setup session before
+	// rtpIp := p.ua.GetIP()
 	rtpIp := p.ua.GetIP()
+	if lip := net.ParseIP(host); lip != nil && !lip.IsUnspecified() {
+		rtpIp = lip
+	}
 	msess, err := NewMediaSession(&net.UDPAddr{IP: rtpIp, Port: 0}, nil)
 	if err != nil {
 		return nil, err
@@ -871,6 +875,9 @@ func (p *Phone) Answer(ansCtx context.Context, opts AnswerOptions) (*DialogServe
 				// Now generate answer with our rtp ports
 				ip := p.ua.GetIP()
 				// rtpPort := rand.Intn(1000*2)/2 + 6000
+				if lip := net.ParseIP(lhost); lip != nil && !lip.IsUnspecified() {
+					ip = lip
+				}
 				msess, err := NewMediaSession(&net.UDPAddr{IP: ip, Port: 0}, nil)
 				if err != nil {
 					return nil, nil, err

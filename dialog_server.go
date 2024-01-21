@@ -28,7 +28,7 @@ func (d *DialogServerSession) Hangup(ctx context.Context) error {
 }
 func (d *DialogServerSession) Bye(ctx context.Context) error {
 	// defer close(d.done)
-	defer d.MediaSession.Close()
+	// defer d.MediaSession.Close()
 	return d.DialogServerSession.Bye(ctx)
 }
 

@@ -17,8 +17,9 @@ type MediaSession struct {
 	Raddr   *net.UDPAddr
 	Laddr   *net.UDPAddr
 
-	rtpConn  net.PacketConn
-	rtcpConn net.PacketConn
+	rtpConn   net.PacketConn
+	rtcpConn  net.PacketConn
+	rtcpRaddr *net.UDPAddr
 
 	rtpConnectedConn  net.Conn
 	rtcpConnectedConn net.Conn
@@ -92,25 +93,27 @@ func NewMediaSessionFromSDP(sdpSend []byte, sdpReceived []byte) (s *MediaSession
 		return nil, fmt.Errorf(emsg)
 	}
 
-	mess := &MediaSession{
-		Formats: formats,
-		Laddr: &net.UDPAddr{
-			IP:   connectionIP,
-			Port: rtpPort,
-		},
-		Raddr: &net.UDPAddr{
-			IP:   dstIP,
-			Port: dstPort,
-		},
+	laddr, raddr := &net.UDPAddr{
+		IP:   connectionIP,
+		Port: rtpPort,
+	}, &net.UDPAddr{
+		IP:   dstIP,
+		Port: dstPort,
 	}
-	return mess, nil
+
+	mess, err := NewMediaSession(laddr, raddr)
+	mess.Formats = formats
+	return mess, err
 }
 
 func NewMediaSession(laddr *net.UDPAddr, raddr *net.UDPAddr) (s *MediaSession, e error) {
 	s = &MediaSession{
 		// Formats: formats,
 		Laddr: laddr,
-		Raddr: raddr,
+	}
+
+	if raddr != nil {
+		s.setRemoteAddr(raddr)
 	}
 
 	// Try to listen on this ports
@@ -119,6 +122,13 @@ func NewMediaSession(laddr *net.UDPAddr, raddr *net.UDPAddr) (s *MediaSession, e
 	}
 
 	return s, nil
+}
+
+func (s *MediaSession) setRemoteAddr(raddr *net.UDPAddr) {
+	s.Raddr = raddr
+	s.rtcpRaddr = new(net.UDPAddr)
+	*s.rtcpRaddr = *s.Raddr
+	s.rtcpRaddr.Port++
 }
 
 func (s *MediaSession) localSDP(fs Formats) []byte {
@@ -170,7 +180,8 @@ func (s *MediaSession) remoteSDP(sdpReceived []byte) error {
 		return err
 	}
 
-	s.Raddr = &net.UDPAddr{IP: ci.IP, Port: md.Port}
+	raddr := &net.UDPAddr{IP: ci.IP, Port: md.Port}
+	s.setRemoteAddr(raddr)
 
 	// dstIP := ci.IP
 	// dstPort := md.Port
@@ -261,6 +272,7 @@ func (s *MediaSession) dial() error {
 	// Update laddr as it can be empheral
 	laddr = s.rtpConnectedConn.LocalAddr().(*net.UDPAddr)
 	s.Laddr = laddr
+
 	return nil
 }
 
@@ -410,11 +422,27 @@ func (m *MediaSession) WriteRTCP(p rtcp.Packet) error {
 		return err
 	}
 
+	return m.writeRTCP(data)
+}
+
+// Use this to write Multi RTCP packets if they can fit in MTU=1500
+func (m *MediaSession) WriteRTCPs(pkts []rtcp.Packet) error {
+	data, err := rtcp.Marshal(pkts)
+	if err != nil {
+		return err
+	}
+
+	return m.writeRTCP(data)
+}
+
+func (m *MediaSession) writeRTCP(data []byte) error {
+	var err error
 	var n int
+
 	if m.rtcpConnectedConn != nil {
 		n, err = m.rtcpConnectedConn.Write(data)
 	} else {
-		n, err = m.rtcpConn.WriteTo(data, m.Raddr)
+		n, err = m.rtcpConn.WriteTo(data, m.rtcpRaddr)
 	}
 	if err != nil {
 		return err
