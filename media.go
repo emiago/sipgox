@@ -12,6 +12,13 @@ import (
 	"github.com/pion/rtp"
 )
 
+var (
+	// RTPPortStart and RTPPortEnd allows defining rtp port range for media
+	RTPPortStart  = 0
+	RTPPortEnd    = 0
+	rtpPortOffset = 0
+)
+
 type MediaSession struct {
 	RTPport int
 	Raddr   *net.UDPAddr
@@ -280,6 +287,30 @@ func (s *MediaSession) dial() error {
 func (s *MediaSession) listen() error {
 	laddr := s.Laddr
 	var err error
+
+	if laddr.Port == 0 && RTPPortStart > 0 && RTPPortEnd > RTPPortStart {
+		// Get next available port
+		for port := RTPPortStart + rtpPortOffset; port < RTPPortEnd; port += 2 {
+			rtpconn, err := net.ListenUDP("udp", &net.UDPAddr{IP: laddr.IP, Port: port})
+			if err != nil {
+				continue
+			}
+			rtpconn.Close()
+
+			rtpcconn, err := net.ListenUDP("udp", &net.UDPAddr{IP: laddr.IP, Port: port + 1})
+			if err != nil {
+				continue
+			}
+			rtpcconn.Close()
+
+			laddr.Port = port
+			rtpPortOffset = (port - RTPPortStart) % (RTPPortEnd - RTPPortStart) // Reset to zero with module
+			break
+		}
+		if laddr.Port == 0 {
+			return fmt.Errorf("No available ports in range %d:%d", RTPPortStart, RTPPortEnd)
+		}
+	}
 
 	s.rtpConn, err = net.ListenUDP("udp", &net.UDPAddr{IP: laddr.IP, Port: laddr.Port})
 	if err != nil {
