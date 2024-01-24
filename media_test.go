@@ -13,10 +13,10 @@ func TestMediaPortRange(t *testing.T) {
 
 	sessions := []*MediaSession{}
 	for i := RTPPortStart; i < RTPPortEnd; i += 2 {
+		require.Equal(t, i-RTPPortStart, int(rtpPortOffset.Load()))
 		mess, err := NewMediaSession(&net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0}, nil)
 		t.Log(mess.rtpConn.LocalAddr(), mess.rtcpConn.LocalAddr())
 		require.NoError(t, err)
-		require.Equal(t, i-RTPPortStart, rtpPortOffset)
 		sessions = append(sessions, mess)
 	}
 

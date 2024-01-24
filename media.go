@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"github.com/pion/rtcp"
@@ -16,7 +17,7 @@ var (
 	// RTPPortStart and RTPPortEnd allows defining rtp port range for media
 	RTPPortStart  = 0
 	RTPPortEnd    = 0
-	rtpPortOffset = 0
+	rtpPortOffset = atomic.Int32{}
 )
 
 type MediaSession struct {
@@ -290,7 +291,8 @@ func (s *MediaSession) listen() error {
 
 	if laddr.Port == 0 && RTPPortStart > 0 && RTPPortEnd > RTPPortStart {
 		// Get next available port
-		for port := RTPPortStart + rtpPortOffset; port < RTPPortEnd; port += 2 {
+		port := RTPPortStart + int(rtpPortOffset.Load())
+		for ; port < RTPPortEnd; port += 2 {
 			rtpconn, err := net.ListenUDP("udp", &net.UDPAddr{IP: laddr.IP, Port: port})
 			if err != nil {
 				continue
@@ -302,14 +304,15 @@ func (s *MediaSession) listen() error {
 				continue
 			}
 			rtpcconn.Close()
-
 			laddr.Port = port
-			rtpPortOffset = (port - RTPPortStart) % (RTPPortEnd - RTPPortStart) // Reset to zero with module
 			break
 		}
 		if laddr.Port == 0 {
 			return fmt.Errorf("No available ports in range %d:%d", RTPPortStart, RTPPortEnd)
 		}
+		// Add some offset so that we use more from range
+		offset := (port + 2 - RTPPortStart) % (RTPPortEnd - RTPPortStart)
+		rtpPortOffset.Store(int32(offset)) // Reset to zero with module
 	}
 
 	s.rtpConn, err = net.ListenUDP("udp", &net.UDPAddr{IP: laddr.IP, Port: laddr.Port})
