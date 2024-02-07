@@ -9,7 +9,6 @@ import (
 	"math/rand"
 	"net"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -213,13 +212,31 @@ var (
 	ErrRegisterUnathorized = fmt.Errorf("register unathorized")
 )
 
-type RegisterOptions struct {
-	Username string
-	Password string
+type RegisterResponseError struct {
+	RegisterReq *sip.Request
+	RegisterRes *sip.Response
+
+	Msg string
+}
+
+func (e *RegisterResponseError) StatusCode() sip.StatusCode {
+	return e.RegisterRes.StatusCode
+}
+
+func (e RegisterResponseError) Error() string {
+	return e.Msg
 }
 
 // Register the phone by sip uri. Pass username and password via opts
 // NOTE: this will block and keep periodic registration. Use context to cancel
+type RegisterOptions struct {
+	Username string
+	Password string
+
+	Expiry       int
+	AllowHeaders []string
+}
+
 func (p *Phone) Register(ctx context.Context, recipient sip.Uri, opts RegisterOptions) error {
 	// Make our client reuse address
 	network := recipient.Headers["transport"]
@@ -243,169 +260,32 @@ func (p *Phone) Register(ctx context.Context, recipient sip.Uri, opts RegisterOp
 		Params: sip.NewParams(),
 	}
 
-	ticker := time.NewTicker(30 * time.Second)
-	regReq, err := p.register(ctx, client, recipient, contactHdr, registerOpts{
-		Username: opts.Username,
-		Password: opts.Password,
-		Expiry:   30,
-	})
+	t, err := p.register(ctx, client, recipient, contactHdr, opts)
 	if err != nil {
 		return err
 	}
 
 	// Unregister
 	defer func() {
-		err := p.unregister(context.TODO(), client, regReq, opts.Username, opts.Password)
+		ctx, _ := context.WithTimeout(context.Background(), 5*time.Second)
+		err := t.unregister(ctx)
 		if err != nil {
 			log.Error().Err(err).Msg("Fail to unregister")
 		}
 	}()
 
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-ticker.C: // TODO make configurable
-		}
-		err := p.registerQualify(ctx, client, regReq, opts.Username, opts.Password)
-		if err != nil {
-			return err
-		}
-	}
+	return t.qualifyLoop(ctx)
 }
 
-type registerOpts struct {
-	Username     string
-	Password     string
-	Expiry       int
-	AllowHeaders []string
-}
+func (p *Phone) register(ctx context.Context, client *sipgo.Client, recipient sip.Uri, contact sip.ContactHeader, opts RegisterOptions) (*RegisterTransaction, error) {
+	t := newRegisterTransaction(p.getLoggerCtx(ctx, "Register"), client, recipient, contact, opts)
 
-func (p *Phone) register(ctx context.Context, client *sipgo.Client, recipient sip.Uri, contact sip.ContactHeader, opts registerOpts) (*sip.Request, error) {
-	username, password, expiry, allowHDRS := opts.Username, opts.Password, opts.Expiry, opts.AllowHeaders
-	log := p.getLoggerCtx(ctx, "Register")
-
-	req := sip.NewRequest(sip.REGISTER, &recipient)
-	req.AppendHeader(&contact)
-	expires := sip.ExpiresHeader(expiry)
-	req.AppendHeader(&expires)
-	if allowHDRS != nil {
-		req.AppendHeader(sip.NewHeader("Allow", strings.Join(allowHDRS, ", ")))
-	}
-
-	// Send request and parse response
-	// req.SetDestination(*dst)
-	log.Info().Str("uri", req.Recipient.String()).Int("expiry", int(expiry)).Msg("sending request")
-	tx, err := client.TransactionRequest(ctx, req)
+	err := t.register(ctx, recipient, contact)
 	if err != nil {
-		return req, fmt.Errorf("fail to create transaction req=%q: %w", req.StartLine(), err)
-	}
-	defer tx.Terminate()
-
-	res, err := getResponse(ctx, tx)
-	if err != nil {
-		return req, fmt.Errorf("fail to get response req=%q : %w", req.StartLine(), err)
+		return nil, err
 	}
 
-	via := res.Via()
-	if via == nil {
-		return nil, fmt.Errorf("No Via header in response")
-	}
-
-	// https://datatracker.ietf.org/doc/html/rfc3581#section-9
-	if rport, _ := via.Params.Get("rport"); rport != "" {
-		if p, err := strconv.Atoi(rport); err == nil {
-			contact.Address.Port = p
-		}
-
-		if received, _ := via.Params.Get("received"); received != "" {
-			// TODO: consider parsing IP
-			contact.Address.Host = received
-		}
-
-		// Update contact address of NAT
-		req.ReplaceHeader(&contact)
-	}
-
-	log.Info().Int("status", int(res.StatusCode)).Msg("Received status")
-	if res.StatusCode == sip.StatusUnauthorized {
-		tx.Terminate() //Terminate previous
-		log.Info().Msg("Unathorized. Doing digest auth")
-		tx, err = digestTransactionRequest(client, username, password, req, res)
-		if err != nil {
-			return req, err
-		}
-		defer tx.Terminate()
-
-		res, err = getResponse(ctx, tx)
-		if err != nil {
-			return req, fmt.Errorf("fail to get response req=%q : %w", req.StartLine(), err)
-		}
-		log.Info().Int("status", int(res.StatusCode)).Msg("Received status")
-	}
-
-	if res.StatusCode != 200 {
-		return req, fmt.Errorf("%s: %w", res.StartLine(), ErrRegisterFail)
-	}
-
-	return req, nil
-}
-
-func (p *Phone) unregister(ctx context.Context, client *sipgo.Client, req *sip.Request, username string, password string) error {
-	log := p.getLoggerCtx(ctx, "Unregister")
-	req.RemoveHeader("Expires")
-	req.RemoveHeader("Contact")
-	req.AppendHeader(sip.NewHeader("Contact", "*"))
-	expires := sip.ExpiresHeader(0)
-	req.AppendHeader(&expires)
-
-	log.Info().Str("uri", req.Recipient.String()).Msg("sending request")
-	return p.registerQualify(ctx, client, req, username, password)
-}
-
-func (p *Phone) registerQualify(ctx context.Context, client *sipgo.Client, req *sip.Request, username string, password string) error {
-	log := p.getLoggerCtx(ctx, "Register")
-
-	// Send request and parse response
-	// req.SetDestination(*dst)
-	req.RemoveHeader("Via")
-	tx, err := client.TransactionRequest(ctx, req)
-	if err != nil {
-		return fmt.Errorf("fail to create transaction req=%q: %w", req.StartLine(), err)
-	}
-	defer tx.Terminate()
-
-	res, err := getResponse(ctx, tx)
-	if err != nil {
-		return fmt.Errorf("fail to get response req=%q : %w", req.StartLine(), err)
-	}
-
-	log.Info().Int("status", int(res.StatusCode)).Msg("Received status")
-	if res.StatusCode == sip.StatusUnauthorized {
-		tx.Terminate() //Terminate previous
-		log.Info().Msg("Unathorized. Doing digest auth")
-		tx, err = digestTransactionRequest(client, username, password, req, res)
-		if err != nil {
-			return err
-		}
-		defer tx.Terminate()
-
-		res, err = getResponse(ctx, tx)
-		if err != nil {
-			return fmt.Errorf("fail to get response req=%q : %w", req.StartLine(), err)
-		}
-		log.Info().Int("status", int(res.StatusCode)).Msg("Received status")
-	}
-
-	if res.StatusCode != 200 {
-		return fmt.Errorf("%s: %w", res.StartLine(), ErrRegisterFail)
-	}
-
-	if res.StatusCode != 200 {
-		return fmt.Errorf("%s: %w", res.StartLine(), ErrRegisterFail)
-	}
-
-	return nil
+	return t, nil
 }
 
 type DialResponseError struct {
@@ -599,6 +479,13 @@ type AnswerOptions struct {
 	// For SDP codec manipulating
 	Formats Formats
 
+	// OnCall is just INVITE request handler that you can use to notify about incoming call
+	// After this dialog should be created and you can watch your changes with dialog.State
+	// -1 == Cancel
+	// 0 == continue
+	// >0 different response
+	OnCall func(inviteRequest *sip.Request) int
+
 	// Default is 200 (answer a call)
 	answerCode   sip.StatusCode
 	answerReason string
@@ -669,7 +556,7 @@ func (p *Phone) Answer(ansCtx context.Context, opts AnswerOptions) (*DialogServe
 			User: p.ua.Name(),
 		}
 
-		regReq, err := p.register(ctx, client, registerURI, contactHdr, registerOpts{
+		regTr, err := p.register(ctx, client, registerURI, contactHdr, RegisterOptions{
 			Username: opts.Username,
 			Password: opts.Password,
 			Expiry:   30,
@@ -680,35 +567,26 @@ func (p *Phone) Answer(ansCtx context.Context, opts AnswerOptions) (*DialogServe
 		}
 
 		// In case our register changed contact due to NAT detection via rport, lets update
-		contact := regReq.Contact()
+		contact := regTr.origin.Contact()
 		contactHdr = *contact.Clone()
 
 		origStopAnswer := stopAnswer
 		go func(ctx context.Context) {
-			ticker := time.NewTicker(30 * time.Second)
-
 			// Override stopAnswer with unregister
 			stopAnswer = sync.OnceFunc(func() {
-				err := p.unregister(context.TODO(), client, regReq, opts.Username, opts.Password)
+				err := regTr.unregister(context.TODO())
 				if err != nil {
 					log.Error().Err(err).Msg("Fail to unregister")
 				}
-				regReq = nil
+				regTr = nil
 				origStopAnswer()
 			})
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case <-ticker.C: // TODO make configurable
-				}
 
-				err := p.registerQualify(ctx, client, regReq, opts.Username, opts.Password)
-				if err != nil {
-					exitError(err)
-					stopAnswer()
-					return
-				}
+			err := regTr.qualifyLoop(ctx)
+			if err != nil {
+				exitError(err)
+				stopAnswer()
+				return
 			}
 		}(ctx)
 	}
@@ -805,14 +683,34 @@ func (p *Phone) Answer(ansCtx context.Context, opts AnswerOptions) (*DialogServe
 		from := req.From()
 		log.Info().Str("Call-ID", req.CallID().Value()).Str("from", from.Value()).Msgf("Request: %s", req.StartLine())
 
-		err := func() error {
-			dialog, err := ds.ReadInvite(req, tx)
-			if err != nil {
-				res := sip.NewResponseFromRequest(req, 400, err.Error(), nil)
-				if err := tx.Respond(res); err != nil {
-					log.Error().Err(err).Msg("Failed to send 400 response")
+		dialog, err := ds.ReadInvite(req, tx)
+		if err != nil {
+			res := sip.NewResponseFromRequest(req, 400, err.Error(), nil)
+			if err := tx.Respond(res); err != nil {
+				log.Error().Err(err).Msg("Failed to send 400 response")
+			}
+
+			exitError(err)
+			stopAnswer()
+			return
+		}
+
+		err = func() error {
+			if opts.OnCall != nil {
+				// Handle OnCall handler
+				res := opts.OnCall(req)
+				switch {
+				case res < 0:
+					if err := dialog.Respond(sip.StatusBusyHere, "Busy", nil); err != nil {
+						d = nil
+						return fmt.Errorf("Failed to respond oncall status code %d: %w", res, err)
+					}
+				case res > 0:
+					if err := dialog.Respond(sip.StatusCode(res), "", nil); err != nil {
+						d = nil
+						return fmt.Errorf("Failed to respond oncall status code %d: %w", res, err)
+					}
 				}
-				return err
 			}
 
 			if opts.answerCode > 0 && opts.answerCode != sip.StatusOK {
@@ -952,6 +850,7 @@ func (p *Phone) Answer(ansCtx context.Context, opts AnswerOptions) (*DialogServe
 		}()
 
 		if err != nil {
+			dialog.Close()
 			exitError(err)
 			stopAnswer()
 		}
