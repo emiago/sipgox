@@ -34,6 +34,11 @@ type Phone struct {
 	listenAddrs []ListenAddr
 
 	log zerolog.Logger
+
+	// Custom client or server
+	// By default they are created
+	client *sipgo.Client
+	server *sipgo.Server
 }
 
 type ListenAddr struct {
@@ -64,6 +69,18 @@ func WithPhoneLogger(l zerolog.Logger) PhoneOption {
 	}
 }
 
+// func WithPhoneClient(c *sipgo.Client) PhoneOption {
+// 	return func(p *Phone) {
+// 		p.client = c
+// 	}
+// }
+
+// func WithPhoneServer(s *sipgo.Server) PhoneOption {
+// 	return func(p *Phone) {
+// 		p.server = s
+// 	}
+// }
+
 func NewPhone(ua *sipgo.UserAgent, options ...PhoneOption) *Phone {
 	p := &Phone{
 		ua: ua,
@@ -87,6 +104,22 @@ func NewPhone(ua *sipgo.UserAgent, options ...PhoneOption) *Phone {
 
 func (p *Phone) Close() {
 }
+
+// func (p *Phone) getOrCreateClient(opts ...sipgo.ClientOption) (*sipgo.Client, error) {
+// 	if p.client != nil {
+// 		return p.client, nil
+// 	}
+
+// 	return sipgo.NewClient(p.ua, opts...)
+// }
+
+// func (p *Phone) getOrCreateServer(opts ...sipgo.ServerOption) (*sipgo.Server, error) {
+// 	if p.server != nil {
+// 		return p.server, nil
+// 	}
+
+// 	return sipgo.NewServer(p.ua, opts...)
+// }
 
 func (p *Phone) getLoggerCtx(ctx context.Context, caller string) zerolog.Logger {
 	l := ctx.Value(ContextLoggerKey)
@@ -115,19 +148,38 @@ func (p *Phone) getInterfaceHostPort(network string, targetAddr string) (ipstr s
 	}
 
 	// Go with random
-	port = rand.Intn(9999) + 6000
-
-	if network == "udp" {
-		tip, _, _ := sip.ParseAddr(targetAddr)
-		if ip := net.ParseIP(tip); ip != nil {
-			if ip.IsLoopback() {
-				// TO avoid UDP COnnected connection problem hitting different subnet
-				return "127.0.0.99", port, nil
-			}
+	// use empheral instead of this
+	ip, err := resolveHostIPWithTarget(network, targetAddr)
+	if err != nil {
+		return ipstr, port, err
+	}
+	switch network {
+	case "udp":
+		var l *net.UDPConn
+		l, err = net.ListenUDP("udp", &net.UDPAddr{IP: ip})
+		if err != nil {
+			return
 		}
+		l.Close()
+		// defer l.Close()
+		port = l.LocalAddr().(*net.UDPAddr).Port
+
+	case "tcp", "ws", "tls", "wss":
+		var l *net.TCPListener
+		l, err = net.ListenTCP("tcp", &net.TCPAddr{IP: ip})
+		if err != nil {
+			return
+		}
+		defer l.Close()
+		port = l.Addr().(*net.TCPAddr).Port
+	default:
+		port = rand.Intn(9999) + 6000
 	}
 
-	ip, err := sip.ResolveSelfIP()
+	if port == 0 {
+		return ipstr, port, fmt.Errorf("Failed to find free port")
+	}
+
 	return ip.String(), port, err
 }
 
@@ -193,8 +245,16 @@ func (p *Phone) createServerListeners(s *sipgo.Server) (listeners []*Listener, e
 	}
 
 	if len(p.listenAddrs) == 0 {
-		addr, _ := p.getInterfaceAddr("udp", "")
-		err := newListener(ListenAddr{Network: "udp", Addr: addr})
+		addr, err := p.getInterfaceAddr("udp", "")
+		if err != nil {
+			return listeners, err
+		}
+		err = newListener(ListenAddr{Network: "udp", Addr: addr})
+		// ip, err := resolveHostIPWithTarget("udp", "")
+		// if err != nil {
+		// 	return listeners, err
+		// }
+		// err = newListener(ListenAddr{Network: "udp", Addr: ip.String() + ":0"})
 		return listeners, err
 	}
 
@@ -238,13 +298,33 @@ type RegisterOptions struct {
 }
 
 func (p *Phone) Register(ctx context.Context, recipient sip.Uri, opts RegisterOptions) error {
+	log := p.getLoggerCtx(ctx, "Register")
 	// Make our client reuse address
 	network := recipient.Headers["transport"]
+	if network == "" {
+		network = "udp"
+	}
 	lhost, lport, _ := p.getInterfaceHostPort(network, recipient.HostPort())
-	addr := net.JoinHostPort(lhost, strconv.Itoa(lport))
+	// addr := net.JoinHostPort(lhost, strconv.Itoa(lport))
+
+	// Run server on UA just to handle OPTIONS
+	// We do not need to create listener as client will create underneath connections and point contact header
+	server, err := sipgo.NewServer(p.ua)
+	if err != nil {
+		return err
+	}
+	defer server.Close()
+
+	server.OnOptions(func(req *sip.Request, tx sip.ServerTransaction) {
+		res := sip.NewResponseFromRequest(req, sip.StatusOK, "OK", nil)
+		if err := tx.Respond(res); err != nil {
+			log.Error().Err(err).Msg("OPTIONS 200 failed to respond")
+		}
+	})
 
 	client, err := sipgo.NewClient(p.ua,
-		sipgo.WithClientAddr(addr),
+		sipgo.WithClientHostname(lhost),
+		sipgo.WithClientPort(lport),
 		sipgo.WithClientNAT(), // add rport support
 	)
 	defer client.Close()
@@ -546,6 +626,8 @@ func (p *Phone) Answer(ansCtx context.Context, opts AnswerOptions) (*DialogServe
 		// We will use registration to resolve NAT
 		client, _ = sipgo.NewClient(p.ua,
 			sipgo.WithClientNAT(),
+			// sipgo.WithClientHostname(lhost),
+			// sipgo.WithClientPort(lport),
 		)
 
 		// Keep registration
@@ -571,23 +653,20 @@ func (p *Phone) Answer(ansCtx context.Context, opts AnswerOptions) (*DialogServe
 		contactHdr = *contact.Clone()
 
 		origStopAnswer := stopAnswer
-		go func(ctx context.Context) {
-			// Override stopAnswer with unregister
-			stopAnswer = sync.OnceFunc(func() {
-				err := regTr.unregister(context.TODO())
-				if err != nil {
-					log.Error().Err(err).Msg("Fail to unregister")
-				}
-				regTr = nil
-				origStopAnswer()
-			})
-
-			err := regTr.qualifyLoop(ctx)
+		// Override stopAnswer with unregister
+		stopAnswer = sync.OnceFunc(func() {
+			ctx, _ := context.WithTimeout(context.Background(), 10*time.Second)
+			err := regTr.unregister(ctx)
 			if err != nil {
-				exitError(err)
-				stopAnswer()
-				return
+				log.Error().Err(err).Msg("Fail to unregister")
 			}
+			regTr = nil
+			origStopAnswer()
+		})
+		go func(ctx context.Context) {
+			err := regTr.qualifyLoop(ctx)
+			exitError(err)
+			stopAnswer()
 		}(ctx)
 	}
 
@@ -918,13 +997,7 @@ func (p *Phone) Answer(ansCtx context.Context, opts AnswerOptions) (*DialogServe
 	select {
 	case d = <-waitDialog:
 		// Make sure we have cleanup after dialog stop
-		go func() {
-			select {
-			case <-d.Done():
-				stopAnswer()
-			}
-		}()
-
+		d.onClose = stopAnswer
 		return d, nil
 	case <-ctx.Done():
 		// Check is this caller stopped answer
