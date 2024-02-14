@@ -116,8 +116,12 @@ func (p *RegisterTransaction) register(ctx context.Context, recipient sip.Uri, c
 func (t *RegisterTransaction) qualifyLoop(ctx context.Context) error {
 
 	// TODO: based on server response Expires header this must be adjusted
-	ticker := time.NewTicker(30 * time.Second)
+	expiry := t.opts.Expiry
+	if expiry == 0 {
+		expiry = 30
+	}
 
+	ticker := time.NewTicker(time.Duration(expiry) * time.Second)
 	for {
 		select {
 		case <-ctx.Done():
