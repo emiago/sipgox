@@ -29,7 +29,7 @@ var (
 )
 
 type Phone struct {
-	ua *sipgo.UserAgent
+	UA *sipgo.UserAgent
 	// listenAddrs is map of transport:addr which will phone use to listen incoming requests
 	listenAddrs []ListenAddr
 
@@ -83,7 +83,7 @@ func WithPhoneLogger(l zerolog.Logger) PhoneOption {
 
 func NewPhone(ua *sipgo.UserAgent, options ...PhoneOption) *Phone {
 	p := &Phone{
-		ua: ua,
+		UA: ua,
 		// c:           client,
 		listenAddrs: []ListenAddr{},
 		log:         log.Logger,
@@ -309,7 +309,7 @@ func (p *Phone) Register(ctx context.Context, recipient sip.Uri, opts RegisterOp
 
 	// Run server on UA just to handle OPTIONS
 	// We do not need to create listener as client will create underneath connections and point contact header
-	server, err := sipgo.NewServer(p.ua)
+	server, err := sipgo.NewServer(p.UA)
 	if err != nil {
 		return err
 	}
@@ -322,7 +322,7 @@ func (p *Phone) Register(ctx context.Context, recipient sip.Uri, opts RegisterOp
 		}
 	})
 
-	client, err := sipgo.NewClient(p.ua,
+	client, err := sipgo.NewClient(p.UA,
 		sipgo.WithClientHostname(lhost),
 		sipgo.WithClientPort(lport),
 		sipgo.WithClientNAT(), // add rport support
@@ -331,7 +331,7 @@ func (p *Phone) Register(ctx context.Context, recipient sip.Uri, opts RegisterOp
 
 	contactHdr := sip.ContactHeader{
 		Address: sip.Uri{
-			User:      p.ua.Name(),
+			User:      p.UA.Name(),
 			Host:      lhost,
 			Port:      lport,
 			Headers:   sip.HeaderParams{"transport": network},
@@ -417,13 +417,13 @@ func (p *Phone) Dial(dialCtx context.Context, recipient sip.Uri, o DialOptions) 
 	if err != nil {
 		return nil, fmt.Errorf("Parsing interface host port failed. Check ListenAddr for defining : %w", err)
 	}
-	contactUri := sip.Uri{User: p.ua.Name(), Host: host, Port: listenPort}
+	contactUri := sip.Uri{User: p.UA.Name(), Host: host, Port: listenPort}
 	contactHDR := sip.ContactHeader{
 		Address: contactUri,
 		Params:  sip.HeaderParams{"transport": network},
 	}
 
-	client, err := sipgo.NewClient(p.ua,
+	client, err := sipgo.NewClient(p.UA,
 		// We must have this address for Contact header
 		sipgo.WithClientHostname(host),
 		sipgo.WithClientPort(listenPort),
@@ -432,7 +432,7 @@ func (p *Phone) Dial(dialCtx context.Context, recipient sip.Uri, o DialOptions) 
 		return nil, err
 	}
 
-	server, err := sipgo.NewServer(p.ua)
+	server, err := sipgo.NewServer(p.UA)
 	if err != nil {
 		return nil, err
 	}
@@ -449,7 +449,7 @@ func (p *Phone) Dial(dialCtx context.Context, recipient sip.Uri, o DialOptions) 
 
 	// TODO setup session before
 	// rtpIp := p.ua.GetIP()
-	rtpIp := p.ua.GetIP()
+	rtpIp := p.UA.GetIP()
 	if lip := net.ParseIP(host); lip != nil && !lip.IsUnspecified() {
 		rtpIp = lip
 	}
@@ -567,14 +567,28 @@ type AnswerOptions struct {
 	OnCall func(inviteRequest *sip.Request) int
 
 	// Default is 200 (answer a call)
-	answerCode   sip.StatusCode
-	answerReason string
+	AnswerCode   sip.StatusCode
+	AnswerReason string
 }
 
 // Answer will answer call
 // Closing ansCtx will close listeners or it will be closed on BYE
 // TODO: reusing listener
 func (p *Phone) Answer(ansCtx context.Context, opts AnswerOptions) (*DialogServerSession, error) {
+	dialog, err := p.answer(ansCtx, opts)
+	if err != nil {
+		return nil, err
+	}
+
+	if !dialog.InviteResponse.IsSuccess() {
+		// Return closed/terminated dialog
+		return dialog, dialog.Close()
+	}
+
+	return dialog, nil
+}
+
+func (p *Phone) answer(ansCtx context.Context, opts AnswerOptions) (*DialogServerSession, error) {
 	log := p.getLoggerCtx(ansCtx, "Answer")
 	ringtime := opts.Ringtime
 
@@ -582,7 +596,7 @@ func (p *Phone) Answer(ansCtx context.Context, opts AnswerOptions) (*DialogServe
 	var d *DialogServerSession
 
 	// TODO reuse server and listener
-	server, err := sipgo.NewServer(p.ua)
+	server, err := sipgo.NewServer(p.UA)
 	if err != nil {
 		return nil, err
 	}
@@ -599,6 +613,7 @@ func (p *Phone) Answer(ansCtx context.Context, opts AnswerOptions) (*DialogServe
 	stopAnswer := sync.OnceFunc(func() {
 		cancel() // Cancel context
 		for _, l := range listeners {
+			log.Debug().Str("addr", l.Addr).Msg("Closing listener")
 			l.Close()
 		}
 	})
@@ -610,7 +625,7 @@ func (p *Phone) Answer(ansCtx context.Context, opts AnswerOptions) (*DialogServe
 	lhost, lport, _ := sip.ParseAddr(listeners[0].Addr)
 	contactHdr := sip.ContactHeader{
 		Address: sip.Uri{
-			User:      p.ua.Name(),
+			User:      p.UA.Name(),
 			Host:      lhost,
 			Port:      lport,
 			Headers:   sip.HeaderParams{"transport": listeners[0].Network},
@@ -620,11 +635,11 @@ func (p *Phone) Answer(ansCtx context.Context, opts AnswerOptions) (*DialogServe
 	}
 
 	// Create client handle for responding
-	client, _ := sipgo.NewClient(p.ua)
+	client, _ := sipgo.NewClient(p.UA)
 
 	if opts.RegisterAddr != "" {
 		// We will use registration to resolve NAT
-		client, _ = sipgo.NewClient(p.ua,
+		client, _ = sipgo.NewClient(p.UA,
 			sipgo.WithClientNAT(),
 			// sipgo.WithClientHostname(lhost),
 			// sipgo.WithClientPort(lport),
@@ -635,7 +650,7 @@ func (p *Phone) Answer(ansCtx context.Context, opts AnswerOptions) (*DialogServe
 		registerURI := sip.Uri{
 			Host: rhost,
 			Port: rport,
-			User: p.ua.Name(),
+			User: p.UA.Name(),
 		}
 
 		regTr, err := p.register(ctx, client, registerURI, contactHdr, RegisterOptions{
@@ -792,11 +807,23 @@ func (p *Phone) Answer(ansCtx context.Context, opts AnswerOptions) (*DialogServe
 				}
 			}
 
-			if opts.answerCode > 0 && opts.answerCode != sip.StatusOK {
-				log.Info().Int("code", int(opts.answerCode)).Msg("Answering call")
-				if err := dialog.Respond(opts.answerCode, opts.answerReason, nil); err != nil {
+			if opts.AnswerCode > 0 && opts.AnswerCode != sip.StatusOK {
+				log.Info().Int("code", int(opts.AnswerCode)).Msg("Answering call")
+				if opts.AnswerReason == "" {
+					// apply some default one
+					switch opts.AnswerCode {
+					case sip.StatusBusyHere:
+						opts.AnswerReason = "Busy"
+					case sip.StatusForbidden:
+						opts.AnswerReason = "Forbidden"
+					case sip.StatusUnauthorized:
+						opts.AnswerReason = "Unathorized"
+					}
+				}
+
+				if err := dialog.Respond(opts.AnswerCode, opts.AnswerReason, nil); err != nil {
 					d = nil
-					return fmt.Errorf("Failed to respond custom status code %d: %w", int(opts.answerCode), err)
+					return fmt.Errorf("Failed to respond custom status code %d: %w", int(opts.AnswerCode), err)
 				}
 				log.Info().Msgf("Response: %s", dialog.InviteResponse.StartLine())
 
@@ -850,7 +877,7 @@ func (p *Phone) Answer(ansCtx context.Context, opts AnswerOptions) (*DialogServe
 			msess, answerSD, err := func() (*MediaSession, []byte, error) {
 				// for {
 				// Now generate answer with our rtp ports
-				ip := p.ua.GetIP()
+				ip := p.UA.GetIP()
 				// rtpPort := rand.Intn(1000*2)/2 + 6000
 				if lip := net.ParseIP(lhost); lip != nil && !lip.IsUnspecified() {
 					ip = lip
@@ -1013,11 +1040,12 @@ func (p *Phone) Answer(ansCtx context.Context, opts AnswerOptions) (*DialogServe
 
 // AnswerWithCode will answer with custom code
 // Dialog object is created but it is immediately closed
+// Deprecated: Use Answer with options
 func (p *Phone) AnswerWithCode(ansCtx context.Context, code sip.StatusCode, reason string, opts AnswerOptions) (*DialogServerSession, error) {
 	// TODO, do all options make sense?
-	opts.answerCode = code
-	opts.answerReason = reason
-	dialog, err := p.Answer(ansCtx, opts)
+	opts.AnswerCode = code
+	opts.AnswerReason = reason
+	dialog, err := p.answer(ansCtx, opts)
 	if err != nil {
 		return nil, err
 	}
