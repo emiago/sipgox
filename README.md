@@ -33,8 +33,9 @@ Checkout `echome` example to see more.
 Phone is wrapper that can make you easy build phone, create/receive SIP call, handle RTP/RTCP.
 
 ### Dialer
+
 ```go
-	ua, _ := sipgo.NewUA()
+    ua, _ := sipgo.NewUA()
     defer ua.Close()
 
     // Create a phone
@@ -57,14 +58,14 @@ Phone is wrapper that can make you easy build phone, create/receive SIP call, ha
     }
 ```
 
-
 ### Receiver
+
 ```go
     ua, _ := sipgo.NewUA()
     defer ua.Close()
 
+    // Create a phone
     phone := sipgox.NewPhone(ua)
-
 
 	ctx, _ := context.WithCancel(context.Background())
 	dialog, err := phone.Answer(ctx, sipgox.AnswerOptions{
