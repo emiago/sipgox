@@ -293,8 +293,9 @@ type RegisterOptions struct {
 	Username string
 	Password string
 
-	Expiry       int
-	AllowHeaders []string
+	Expiry        int
+	AllowHeaders  []string
+	UnregisterAll bool
 }
 
 func (p *Phone) Register(ctx context.Context, recipient sip.Uri, opts RegisterOptions) error {
@@ -360,6 +361,12 @@ func (p *Phone) Register(ctx context.Context, recipient sip.Uri, opts RegisterOp
 func (p *Phone) register(ctx context.Context, client *sipgo.Client, recipient sip.Uri, contact sip.ContactHeader, opts RegisterOptions) (*RegisterTransaction, error) {
 	t := newRegisterTransaction(p.getLoggerCtx(ctx, "Register"), client, recipient, contact, opts)
 
+	if opts.UnregisterAll {
+		if err := t.unregister(ctx); err != nil {
+			return nil, ErrRegisterFail
+		}
+	}
+
 	err := t.register(ctx, recipient, contact)
 	if err != nil {
 		return nil, err
@@ -411,28 +418,29 @@ func (p *Phone) Dial(dialCtx context.Context, recipient sip.Uri, o DialOptions) 
 	// Remove password from uri.
 	recipient.Password = ""
 
-	// Get our address.
-	// TODO have a interface for defining instead listen
-	host, listenPort, err := p.getInterfaceHostPort(network, recipient.HostPort())
+	server, err := sipgo.NewServer(p.UA)
 	if err != nil {
-		return nil, fmt.Errorf("Parsing interface host port failed. Check ListenAddr for defining : %w", err)
+		return nil, err
 	}
-	contactUri := sip.Uri{User: p.UA.Name(), Host: host, Port: listenPort}
+
+	// We need to listen as long our answer context is running
+	// Listener needs to be alive even after we have created dialog
+	listeners, err := p.createServerListeners(server)
+	if err != nil {
+		return nil, err
+	}
+
+	host, listenPort, _ := sip.ParseAddr(listeners[0].Addr)
 	contactHDR := sip.ContactHeader{
-		Address: contactUri,
+		Address: sip.Uri{User: p.UA.Name(), Host: host, Port: listenPort},
 		Params:  sip.HeaderParams{"transport": network},
 	}
 
 	client, err := sipgo.NewClient(p.UA,
 		// We must have this address for Contact header
 		sipgo.WithClientHostname(host),
-		sipgo.WithClientPort(listenPort),
+		// sipgo.WithClientPort(listenPort), // We can enforce port for all transports. It can only be done for UDP
 	)
-	if err != nil {
-		return nil, err
-	}
-
-	server, err := sipgo.NewServer(p.UA)
 	if err != nil {
 		return nil, err
 	}
@@ -441,7 +449,7 @@ func (p *Phone) Dial(dialCtx context.Context, recipient sip.Uri, o DialOptions) 
 	// Setup srv for bye
 	server.OnBye(func(req *sip.Request, tx sip.ServerTransaction) {
 		if err := dc.ReadBye(req, tx); err != nil {
-			log.Error().Err(err).Msg("Fail to setup client handle")
+			log.Error().Err(err).Msg("dialog reading bye went with error")
 			return
 		}
 		log.Debug().Msg("Received BYE")
@@ -473,69 +481,95 @@ func (p *Phone) Dial(dialCtx context.Context, recipient sip.Uri, o DialOptions) 
 		req.AppendHeader(h)
 	}
 
-	waitStart := time.Now()
-	dialog, err := dc.WriteInvite(ctx, req)
-	if err != nil {
-		return nil, err
+	// Start server
+	for _, l := range listeners {
+		log.Info().Str("network", l.Network).Str("addr", l.Addr).Msg("Listening on")
+		go l.Listen()
 	}
 
-	log.Info().
-		Str("Call-ID", req.CallID().Value()).
-		// Str("FromAddr", req.From().Address.Addr()).
-		// Str("ToAddr", req.To().Address.Addr()).
-		Msgf("Request: %s", req.StartLine())
-
-	// Wait 200
-	err = dialog.WaitAnswer(ctx, sipgo.AnswerOptions{
-		OnResponse: func(res *sip.Response) {
-			log.Info().Msgf("Response: %s", res.StartLine())
-		},
-		Username: o.Username,
-		Password: o.Password,
+	stopDial := sync.OnceFunc(func() {
+		for _, l := range listeners {
+			log.Debug().Str("addr", l.Addr).Msg("Closing listener")
+			l.Close()
+		}
 	})
 
-	var rerr *sipgo.ErrDialogResponse
-	if errors.As(err, &rerr) {
-		return nil, &DialResponseError{
-			InviteReq:  req,
-			InviteResp: rerr.Res,
-			Msg:        fmt.Sprintf("Call not answered: %s", rerr.Res.StartLine()),
+	// TODO move this out
+	dial := func(ctx context.Context) (*DialogClientSession, error) {
+		waitStart := time.Now()
+		dialog, err := dc.WriteInvite(ctx, req)
+		if err != nil {
+			return nil, err
 		}
+
+		log.Info().
+			Str("Call-ID", req.CallID().Value()).
+			// Str("FromAddr", req.From().Address.Addr()).
+			// Str("ToAddr", req.To().Address.Addr()).
+			Msgf("Request: %s", req.StartLine())
+
+		// Wait 200
+		err = dialog.WaitAnswer(ctx, sipgo.AnswerOptions{
+			OnResponse: func(res *sip.Response) {
+				log.Info().Msgf("Response: %s", res.StartLine())
+			},
+			Username: o.Username,
+			Password: o.Password,
+		})
+
+		var rerr *sipgo.ErrDialogResponse
+		if errors.As(err, &rerr) {
+			return nil, &DialResponseError{
+				InviteReq:  req,
+				InviteResp: rerr.Res,
+				Msg:        fmt.Sprintf("Call not answered: %s", rerr.Res.StartLine()),
+			}
+		}
+
+		if err != nil {
+			return nil, err
+		}
+
+		r := dialog.InviteResponse
+		log.Info().
+			Int("code", int(r.StatusCode)).
+			// Str("reason", r.Reason).
+			Str("duration", time.Since(waitStart).String()).
+			Msg("Call answered")
+
+		// Setup media
+		err = msess.remoteSDP(r.Body())
+		// TODO handle bad SDP
+		if err != nil {
+			return nil, err
+		}
+
+		log.Info().
+			Str("formats", FormatsList(msess.Formats).String()).
+			Str("localAddr", msess.Laddr.String()).
+			Str("remoteAddr", msess.Raddr.String()).
+			Msg("Media/RTP session created")
+
+		// Send ACK
+		if err := dialog.Ack(ctx); err != nil {
+			return nil, fmt.Errorf("fail to send ACK: %w", err)
+		}
+
+		return &DialogClientSession{
+			MediaSession:        msess,
+			DialogClientSession: dialog,
+		}, nil
 	}
 
+	dialog, err := dial(ctx)
 	if err != nil {
+		stopDial()
 		return nil, err
 	}
 
-	r := dialog.InviteResponse
-	log.Info().
-		Int("code", int(r.StatusCode)).
-		// Str("reason", r.Reason).
-		Str("duration", time.Since(waitStart).String()).
-		Msg("Call answered")
-
-	// Setup media
-	err = msess.remoteSDP(r.Body())
-	// TODO handle bad SDP
-	if err != nil {
-		return nil, err
-	}
-
-	log.Info().
-		Str("formats", FormatsList(msess.Formats).String()).
-		Str("localAddr", msess.Laddr.String()).
-		Str("remoteAddr", msess.Raddr.String()).
-		Msg("Media/RTP session created")
-
-	// Send ACK
-	if err := dialog.Ack(ctx); err != nil {
-		return nil, fmt.Errorf("fail to send ACK: %w", err)
-	}
-
-	return &DialogClientSession{
-		MediaSession:        msess,
-		DialogClientSession: dialog,
-	}, nil
+	// Attach on close
+	dialog.onClose = stopDial
+	return dialog, nil
 }
 
 var (
@@ -657,6 +691,7 @@ func (p *Phone) answer(ansCtx context.Context, opts AnswerOptions) (*DialogServe
 			Username: opts.Username,
 			Password: opts.Password,
 			Expiry:   30,
+			// UnregisterAll: true,
 			// AllowHeaders: server.RegisteredMethods(),
 		})
 		if err != nil {

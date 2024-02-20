@@ -13,10 +13,18 @@ type DialogClientSession struct {
 	*MediaSession
 
 	*sipgo.DialogClientSession
+
+	// onClose used to cleanup internal logic
+	onClose func()
 }
 
 func (d *DialogClientSession) Close() error {
 	defer d.MediaSession.Close()
+
+	if d.onClose != nil {
+		d.onClose()
+	}
+
 	return d.DialogClientSession.Close()
 }
 
