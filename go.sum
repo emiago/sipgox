@@ -11,6 +11,8 @@ github.com/emiago/sipgo v0.17.2-0.20240218201220-1a78c618dcab h1:TRP3milym4DeZRw
 github.com/emiago/sipgo v0.17.2-0.20240218201220-1a78c618dcab/go.mod h1:I6vN5GNx9KRUFtnH4yd3aHJqNgB161GUOGG+X1zmPTc=
 github.com/emiago/sipgo v0.17.2-0.20240220201440-cd98509cc88d h1:uwoxgGHlYprdGKV+GxdS4Gv7+U62CZF8f0lUVYM5rRQ=
 github.com/emiago/sipgo v0.17.2-0.20240220201440-cd98509cc88d/go.mod h1:I6vN5GNx9KRUFtnH4yd3aHJqNgB161GUOGG+X1zmPTc=
+github.com/emiago/sipgo v0.18.0 h1:L6n7uVldlv8WPtcWfRMM1v9n9MmVZ3nov9jVJ3S/Puk=
+github.com/emiago/sipgo v0.18.0/go.mod h1:I6vN5GNx9KRUFtnH4yd3aHJqNgB161GUOGG+X1zmPTc=
 github.com/faiface/beep v1.1.0 h1:A2gWP6xf5Rh7RG/p9/VAW2jRSDEGQm5sbOb38sf5d4c=
 github.com/faiface/beep v1.1.0/go.mod h1:6I8p6kK2q4opL/eWb+kAkk38ehnTunWeToJB+s51sT4=
 github.com/gdamore/encoding v1.0.0/go.mod h1:alR0ol34c49FCSBLjhosxzcPHQbf2trDkoo5dl+VrEg=
