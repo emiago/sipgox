@@ -399,6 +399,10 @@ type DialOptions struct {
 	SipHeaders []sip.Header
 
 	Formats Formats
+
+	// OnResponse is just callback called after INVITE is sent and all responses before final one
+	// Useful for tracking call state
+	OnResponse func(inviteResp *sip.Response)
 }
 
 // Dial creates dialog with recipient
@@ -512,6 +516,9 @@ func (p *Phone) Dial(dialCtx context.Context, recipient sip.Uri, o DialOptions) 
 		err = dialog.WaitAnswer(ctx, sipgo.AnswerOptions{
 			OnResponse: func(res *sip.Response) {
 				log.Info().Msgf("Response: %s", res.StartLine())
+				if o.OnResponse != nil {
+					o.OnResponse(res)
+				}
 			},
 			Username: o.Username,
 			Password: o.Password,
@@ -1112,37 +1119,4 @@ func getResponse(ctx context.Context, tx sip.ClientTransaction) (*sip.Response, 
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
-}
-
-// digestTransactionRequest checks response if 401 and sends digest auth
-// TODO maybe this should be part of client
-func digestTransactionRequest(client *sipgo.Client, username string, password string, req *sip.Request, res *sip.Response) (sip.ClientTransaction, error) {
-	// Get WwW-Authenticate
-	wwwAuth := res.GetHeader("WWW-Authenticate")
-	chal, err := digest.ParseChallenge(wwwAuth.Value())
-	if err != nil {
-		return nil, fmt.Errorf("fail to parse chalenge wwwauth=%q: %w", wwwAuth.Value(), err)
-	}
-
-	// Reply with digest
-	cred, err := digest.Digest(chal, digest.Options{
-		Method:   req.Method.String(),
-		URI:      req.Recipient.Addr(),
-		Username: username,
-		Password: password,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("fail to build digest: %w", err)
-	}
-
-	cseq := req.CSeq()
-	cseq.SeqNo++
-	// newReq := req.Clone()
-
-	req.AppendHeader(sip.NewHeader("Authorization", cred.String()))
-	defer req.RemoveHeader("Authorization")
-
-	req.RemoveHeader("Via")
-	tx, err := client.TransactionRequest(context.TODO(), req, sipgo.ClientRequestAddVia)
-	return tx, err
 }

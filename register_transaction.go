@@ -86,10 +86,14 @@ func (p *RegisterTransaction) register(ctx context.Context, recipient sip.Uri, c
 	}
 
 	log.Info().Int("status", int(res.StatusCode)).Msg("Received status")
-	if res.StatusCode == sip.StatusUnauthorized {
+	if res.StatusCode == sip.StatusUnauthorized || res.StatusCode == sip.StatusProxyAuthRequired {
 		tx.Terminate() //Terminate previous
+
 		log.Info().Msg("Unathorized. Doing digest auth")
-		tx, err = digestTransactionRequest(client, username, password, req, res)
+		tx, err = client.DoDigestAuth(ctx, req, res, sipgo.DigestAuth{
+			Username: username,
+			Password: password,
+		})
 		if err != nil {
 			return err
 		}
@@ -173,10 +177,13 @@ func (t *RegisterTransaction) reregister(ctx context.Context, req *sip.Request) 
 	}
 
 	log.Info().Int("status", int(res.StatusCode)).Msg("Received status")
-	if res.StatusCode == sip.StatusUnauthorized {
+	if res.StatusCode == sip.StatusUnauthorized || res.StatusCode == sip.StatusProxyAuthRequired {
 		tx.Terminate() //Terminate previous
 		log.Info().Msg("Unathorized. Doing digest auth")
-		tx, err = digestTransactionRequest(client, username, password, req, res)
+		tx, err = client.DoDigestAuth(ctx, req, res, sipgo.DigestAuth{
+			Username: username,
+			Password: password,
+		})
 		if err != nil {
 			return err
 		}
