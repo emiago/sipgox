@@ -676,15 +676,18 @@ func (p *Phone) answer(ansCtx context.Context, opts AnswerOptions) (*DialogServe
 	}
 
 	// Create client handle for responding
-	client, _ := sipgo.NewClient(p.UA)
+	client, err := sipgo.NewClient(p.UA,
+		sipgo.WithClientNAT(), // needed for registration
+		sipgo.WithClientHostname(lhost),
+		// Do not use with ClientPort as we want always this to be a seperate connection
+	)
+	if err != nil {
+		return nil, err
+	}
 
 	if opts.RegisterAddr != "" {
 		// We will use registration to resolve NAT
-		client, _ = sipgo.NewClient(p.UA,
-			sipgo.WithClientNAT(),
-			// sipgo.WithClientHostname(lhost),
-			// sipgo.WithClientPort(lport),
-		)
+		// so WithClientNAT must be present
 
 		// Keep registration
 		rhost, rport, _ := sip.ParseAddr(opts.RegisterAddr)
@@ -839,12 +842,12 @@ func (p *Phone) answer(ansCtx context.Context, opts AnswerOptions) (*DialogServe
 				case res < 0:
 					if err := dialog.Respond(sip.StatusBusyHere, "Busy", nil); err != nil {
 						d = nil
-						return fmt.Errorf("Failed to respond oncall status code %d: %w", res, err)
+						return fmt.Errorf("failed to respond oncall status code %d: %w", res, err)
 					}
 				case res > 0:
 					if err := dialog.Respond(sip.StatusCode(res), "", nil); err != nil {
 						d = nil
-						return fmt.Errorf("Failed to respond oncall status code %d: %w", res, err)
+						return fmt.Errorf("failed to respond oncall status code %d: %w", res, err)
 					}
 				}
 			}
@@ -865,7 +868,7 @@ func (p *Phone) answer(ansCtx context.Context, opts AnswerOptions) (*DialogServe
 
 				if err := dialog.Respond(opts.AnswerCode, opts.AnswerReason, nil); err != nil {
 					d = nil
-					return fmt.Errorf("Failed to respond custom status code %d: %w", int(opts.AnswerCode), err)
+					return fmt.Errorf("failed to respond custom status code %d: %w", int(opts.AnswerCode), err)
 				}
 				log.Info().Msgf("Response: %s", dialog.InviteResponse.StartLine())
 
@@ -897,9 +900,9 @@ func (p *Phone) answer(ansCtx context.Context, opts AnswerOptions) (*DialogServe
 
 				select {
 				case <-tx.Cancels():
-					return fmt.Errorf("Received CANCEL")
+					return fmt.Errorf("received CANCEL")
 				case <-tx.Done():
-					return fmt.Errorf("Invite transaction finished while ringing")
+					return fmt.Errorf("invite transaction finished while ringing")
 				case <-ctx.Done():
 					return ctx.Err()
 				case <-time.After(ringtime):
@@ -909,7 +912,7 @@ func (p *Phone) answer(ansCtx context.Context, opts AnswerOptions) (*DialogServe
 				// Send progress
 				res := sip.NewResponseFromRequest(req, 100, "Trying", nil)
 				if err := dialog.WriteResponse(res); err != nil {
-					return fmt.Errorf("Fail to send 100 response: %w", err)
+					return fmt.Errorf("failed to send 100 response: %w", err)
 				}
 
 				log.Info().Msgf("Response: %s", res.StartLine())
