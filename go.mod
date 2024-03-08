@@ -5,7 +5,7 @@ go 1.21
 toolchain go1.21.5
 
 require (
-	github.com/emiago/sipgo v0.18.1-0.20240305161426-1566e28ace16
+	github.com/emiago/sipgo v0.18.1-0.20240308180613-dc085c1e3018
 	github.com/faiface/beep v1.1.0
 	github.com/icholy/digest v0.1.22
 	github.com/pion/rtcp v1.2.10

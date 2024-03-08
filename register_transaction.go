@@ -14,7 +14,7 @@ import (
 
 type RegisterTransaction struct {
 	opts   RegisterOptions
-	origin *sip.Request
+	Origin *sip.Request
 
 	client *sipgo.Client
 	log    zerolog.Logger
@@ -24,10 +24,10 @@ func (t *RegisterTransaction) Terminate() error {
 	return t.client.Close()
 }
 
-func newRegisterTransaction(log zerolog.Logger, client *sipgo.Client, recipient sip.Uri, contact sip.ContactHeader, opts RegisterOptions) *RegisterTransaction {
+func NewRegisterTransaction(log zerolog.Logger, client *sipgo.Client, recipient sip.Uri, contact sip.ContactHeader, opts RegisterOptions) *RegisterTransaction {
 	expiry, allowHDRS := opts.Expiry, opts.AllowHeaders
 	// log := p.getLoggerCtx(ctx, "Register")
-	req := sip.NewRequest(sip.REGISTER, &recipient)
+	req := sip.NewRequest(sip.REGISTER, recipient)
 	req.AppendHeader(&contact)
 	expires := sip.ExpiresHeader(expiry)
 	req.AppendHeader(&expires)
@@ -36,7 +36,7 @@ func newRegisterTransaction(log zerolog.Logger, client *sipgo.Client, recipient 
 	}
 
 	t := &RegisterTransaction{
-		origin: req, // origin maybe updated after first register
+		Origin: req, // origin maybe updated after first register
 		opts:   opts,
 		client: client,
 		log:    log,
@@ -45,11 +45,12 @@ func newRegisterTransaction(log zerolog.Logger, client *sipgo.Client, recipient 
 	return t
 }
 
-func (p *RegisterTransaction) register(ctx context.Context, recipient sip.Uri, contact sip.ContactHeader) error {
+func (p *RegisterTransaction) Register(ctx context.Context, recipient sip.Uri) error {
 	username, password, expiry := p.opts.Username, p.opts.Password, p.opts.Expiry
 	client := p.client
 	log := p.log
-	req := p.origin
+	req := p.Origin
+	contact := *req.Contact().Clone()
 
 	// Send request and parse response
 	// req.SetDestination(*dst)
@@ -67,7 +68,7 @@ func (p *RegisterTransaction) register(ctx context.Context, recipient sip.Uri, c
 
 	via := res.Via()
 	if via == nil {
-		return fmt.Errorf("No Via header in response")
+		return fmt.Errorf("no Via header in response")
 	}
 
 	// https://datatracker.ietf.org/doc/html/rfc3581#section-9
@@ -117,7 +118,7 @@ func (p *RegisterTransaction) register(ctx context.Context, recipient sip.Uri, c
 	return nil
 }
 
-func (t *RegisterTransaction) qualifyLoop(ctx context.Context) error {
+func (t *RegisterTransaction) QualifyLoop(ctx context.Context) error {
 
 	// TODO: based on server response Expires header this must be adjusted
 	expiry := t.opts.Expiry
@@ -139,9 +140,9 @@ func (t *RegisterTransaction) qualifyLoop(ctx context.Context) error {
 	}
 }
 
-func (t *RegisterTransaction) unregister(ctx context.Context) error {
+func (t *RegisterTransaction) Unregister(ctx context.Context) error {
 	log := t.log
-	req := t.origin
+	req := t.Origin
 
 	req.RemoveHeader("Expires")
 	req.RemoveHeader("Contact")
@@ -154,7 +155,7 @@ func (t *RegisterTransaction) unregister(ctx context.Context) error {
 }
 
 func (t *RegisterTransaction) qualify(ctx context.Context) error {
-	return t.reregister(ctx, t.origin)
+	return t.reregister(ctx, t.Origin)
 }
 
 func (t *RegisterTransaction) reregister(ctx context.Context, req *sip.Request) error {

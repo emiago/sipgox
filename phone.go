@@ -349,25 +349,25 @@ func (p *Phone) Register(ctx context.Context, recipient sip.Uri, opts RegisterOp
 	// Unregister
 	defer func() {
 		ctx, _ := context.WithTimeout(context.Background(), 5*time.Second)
-		err := t.unregister(ctx)
+		err := t.Unregister(ctx)
 		if err != nil {
 			log.Error().Err(err).Msg("Fail to unregister")
 		}
 	}()
 
-	return t.qualifyLoop(ctx)
+	return t.QualifyLoop(ctx)
 }
 
 func (p *Phone) register(ctx context.Context, client *sipgo.Client, recipient sip.Uri, contact sip.ContactHeader, opts RegisterOptions) (*RegisterTransaction, error) {
-	t := newRegisterTransaction(p.getLoggerCtx(ctx, "Register"), client, recipient, contact, opts)
+	t := NewRegisterTransaction(p.getLoggerCtx(ctx, "Register"), client, recipient, contact, opts)
 
 	if opts.UnregisterAll {
-		if err := t.unregister(ctx); err != nil {
+		if err := t.Unregister(ctx); err != nil {
 			return nil, ErrRegisterFail
 		}
 	}
 
-	err := t.register(ctx, recipient, contact)
+	err := t.Register(ctx, recipient)
 	if err != nil {
 		return nil, err
 	}
@@ -471,10 +471,10 @@ func (p *Phone) Dial(dialCtx context.Context, recipient sip.Uri, o DialOptions) 
 	}
 
 	// Create Generic SDP
-	sdpSend := msess.localSDP(o.Formats)
+	sdpSend := msess.LocalSDP(o.Formats)
 
 	// Creating INVITE
-	req := sip.NewRequest(sip.INVITE, &recipient)
+	req := sip.NewRequest(sip.INVITE, recipient)
 	req.SetTransport(network)
 	req.AppendHeader(sip.NewHeader("Content-Type", "application/sdp"))
 	req.SetBody(sdpSend)
@@ -545,7 +545,7 @@ func (p *Phone) Dial(dialCtx context.Context, recipient sip.Uri, o DialOptions) 
 			Msg("Call answered")
 
 		// Setup media
-		err = msess.remoteSDP(r.Body())
+		err = msess.RemoteSDP(r.Body())
 		// TODO handle bad SDP
 		if err != nil {
 			return nil, err
@@ -709,14 +709,14 @@ func (p *Phone) answer(ansCtx context.Context, opts AnswerOptions) (*DialogServe
 		}
 
 		// In case our register changed contact due to NAT detection via rport, lets update
-		contact := regTr.origin.Contact()
+		contact := regTr.Origin.Contact()
 		contactHdr = *contact.Clone()
 
 		origStopAnswer := stopAnswer
 		// Override stopAnswer with unregister
 		stopAnswer = sync.OnceFunc(func() {
 			ctx, _ := context.WithTimeout(context.Background(), 10*time.Second)
-			err := regTr.unregister(ctx)
+			err := regTr.Unregister(ctx)
 			if err != nil {
 				log.Error().Err(err).Msg("Fail to unregister")
 			}
@@ -724,7 +724,7 @@ func (p *Phone) answer(ansCtx context.Context, opts AnswerOptions) (*DialogServe
 			origStopAnswer()
 		})
 		go func(ctx context.Context) {
-			err := regTr.qualifyLoop(ctx)
+			err := regTr.QualifyLoop(ctx)
 			exitError(err)
 			stopAnswer()
 		}(ctx)
@@ -932,12 +932,12 @@ func (p *Phone) answer(ansCtx context.Context, opts AnswerOptions) (*DialogServe
 					return nil, nil, err
 				}
 
-				err = msess.remoteSDP(req.Body())
+				err = msess.RemoteSDP(req.Body())
 				if err != nil {
 					return nil, nil, err
 				}
 
-				answerSD := msess.localSDP(opts.Formats)
+				answerSD := msess.LocalSDP(opts.Formats)
 				return msess, answerSD, err
 			}()
 

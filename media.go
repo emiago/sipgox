@@ -139,7 +139,7 @@ func (s *MediaSession) setRemoteAddr(raddr *net.UDPAddr) {
 	s.rtcpRaddr.Port++
 }
 
-func (s *MediaSession) localSDP(fs Formats) []byte {
+func (s *MediaSession) LocalSDP(fs Formats) []byte {
 	formats := make([]int, 0)
 	// TODO remove this conversion
 	if !fs.Alaw && !fs.Ulaw {
@@ -171,7 +171,7 @@ func (s *MediaSession) localSDP(fs Formats) []byte {
 	return SDPGeneric(ip, ip, rtpPort, SDPModeSendrecv, fs)
 }
 
-func (s *MediaSession) remoteSDP(sdpReceived []byte) error {
+func (s *MediaSession) RemoteSDP(sdpReceived []byte) error {
 	sd := SessionDescription{}
 	if err := UnmarshalSDP(sdpReceived, &sd); err != nil {
 		// p.log.Debug().Err(err).Msgf("Fail to parse SDP\n%q", string(r.Body()))
