@@ -43,6 +43,8 @@ phone := sipgox.NewPhone(ua)
 
 // Run dial
 ctx, _ := context.WithTimeout(context.Background(), 60*time.Second)
+
+// Blocks until call is answered
 dialog, err := phone.Dial(ctx, sip.Uri{User:"bob", Host: "localhost", Port:5060}, sipgox.DialOptions{})
 if err != nil {
     // handle error
@@ -61,13 +63,15 @@ case <-time.After(5 *time.Second):
 ### Receiver
 
 ```go
+ctx, _ := context.WithCancel(context.Background())
+
 ua, _ := sipgo.NewUA()
 defer ua.Close()
 
 // Create a phone
 phone := sipgox.NewPhone(ua)
 
-ctx, _ := context.WithCancel(context.Background())
+// Blocks until call is answered
 dialog, err := phone.Answer(ctx, sipgox.AnswerOptions{
     Ringtime:  5* time.Second,
 })
@@ -84,3 +88,17 @@ case <-time.After(10 *time.Second):
     dialog.Hangup(context.TODO())
 }
 ```
+
+### Reading/Writing RTP/RTCP on dialog
+
+After you Answer or Dial on phone, you receive dialog.
+
+**RTP**
+```go
+pkt, err := dialog.ReadRTP()
+
+err := dialog.WriteRTP(pkt)
+
+```
+
+similar is for RTCP
