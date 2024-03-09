@@ -1,4 +1,4 @@
-package sipgox
+package sdp
 
 import (
 	"bytes"
@@ -39,12 +39,21 @@ func (sd SessionDescription) Value(key string) string {
 type MediaDescription struct {
 	MediaType string
 
-	Port       int
-	PortNumber int
+	Port        int
+	PortNumbers int
 
 	Proto string
 
 	Formats []string
+}
+
+func (m *MediaDescription) String() string {
+	ports := strconv.Itoa(m.Port)
+	if m.PortNumbers > 0 {
+		ports += "/" + strconv.Itoa(m.PortNumbers)
+	}
+
+	return fmt.Sprintf("m=%s %s %s %s", m.MediaType, ports, m.Proto, strings.Join(m.Formats, " "))
 }
 
 func (sd SessionDescription) MediaDescription(mediaType string) (MediaDescription, error) {
@@ -79,7 +88,7 @@ func (sd SessionDescription) MediaDescription(mediaType string) (MediaDescriptio
 	ports := strings.Split(fields[1], "/")
 	md.Port, _ = strconv.Atoi(ports[0])
 	if len(ports) > 1 {
-		md.PortNumber, _ = strconv.Atoi(ports[1])
+		md.PortNumbers, _ = strconv.Atoi(ports[1])
 	}
 
 	md.Proto = fields[2]
@@ -118,10 +127,10 @@ func (sd SessionDescription) ConnectionInformation() (ci ConnectionInformation, 
 	return ci, nil
 }
 
-// UnmarshalSDP is non validate version of sdp parsing
+// Unmarshal is non validate version of sdp parsing
 // Validation of values needs to be seperate
 // NOT OPTIMIZED
-func UnmarshalSDP(data []byte, sdptr *SessionDescription) error {
+func Unmarshal(data []byte, sdptr *SessionDescription) error {
 	reader := bufReader.Get().(*bytes.Buffer)
 	defer bufReader.Put(reader)
 	reader.Reset()

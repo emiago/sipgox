@@ -1,7 +1,6 @@
 package sipgox
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -9,6 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/emiago/sipgox/sdp"
 	"github.com/pion/rtcp"
 	"github.com/pion/rtp"
 )
@@ -21,9 +21,8 @@ var (
 )
 
 type MediaSession struct {
-	RTPport int
-	Raddr   *net.UDPAddr
-	Laddr   *net.UDPAddr
+	Raddr *net.UDPAddr
+	Laddr *net.UDPAddr
 
 	rtpConn   net.PacketConn
 	rtcpConn  net.PacketConn
@@ -32,100 +31,21 @@ type MediaSession struct {
 	rtpConnectedConn  net.Conn
 	rtcpConnectedConn net.Conn
 
-	Formats []int // For now can be set depending on SDP exchange
+	// Depending of negotiation this can change
+	// Not thread safe
+	Formats sdp.Formats
 }
 
-func NewMediaSessionFromSDP(sdpSend []byte, sdpReceived []byte) (s *MediaSession, err error) {
-	sd := SessionDescription{}
-	if err := UnmarshalSDP(sdpSend, &sd); err != nil {
-		// p.log.Debug().Err(err).Msgf("Fail to parse SDP\n%q", string(r.Body()))
-		return nil, fmt.Errorf("fail to parse send SDP: %w", err)
-	}
-
-	md, err := sd.MediaDescription("audio")
-	if err != nil {
-		return nil, err
-	}
-
-	ci, err := sd.ConnectionInformation()
-	if err != nil {
-		return nil, err
-	}
-
-	rtpPort := md.Port
-	sendCodecs := md.Formats
-	connectionIP := ci.IP
-
-	sd = SessionDescription{}
-	if err := UnmarshalSDP(sdpReceived, &sd); err != nil {
-		// p.log.Debug().Err(err).Msgf("Fail to parse SDP\n%q", string(r.Body()))
-		return nil, fmt.Errorf("fail to parse received SDP: %w", err)
-	}
-
-	md, err = sd.MediaDescription("audio")
-	if err != nil {
-		return nil, err
-	}
-
-	ci, err = sd.ConnectionInformation()
-	if err != nil {
-		return nil, err
-	}
-
-	dstIP := ci.IP
-	dstPort := md.Port
-	recvCodecs := md.Formats
-
-	// Check codecs but expect all send codecs are send
-	formats := make([]int, 0, cap(sendCodecs))
-	parseErr := []error{}
-	for _, cr := range recvCodecs {
-		for _, cs := range sendCodecs {
-			if cr == cs {
-				f, err := strconv.Atoi(cs)
-				// keep going
-				if err != nil {
-					parseErr = append(parseErr, err)
-					continue
-				}
-				formats = append(formats, f)
-			}
-		}
-	}
-
-	if len(formats) == 0 {
-		emsg := "No formats found"
-		for _, e := range parseErr {
-			emsg += ": " + e.Error()
-		}
-		return nil, fmt.Errorf(emsg)
-	}
-
-	laddr, raddr := &net.UDPAddr{
-		IP:   connectionIP,
-		Port: rtpPort,
-	}, &net.UDPAddr{
-		IP:   dstIP,
-		Port: dstPort,
-	}
-
-	mess, err := NewMediaSession(laddr, raddr)
-	mess.Formats = formats
-	return mess, err
-}
-
-func NewMediaSession(laddr *net.UDPAddr, raddr *net.UDPAddr) (s *MediaSession, e error) {
+func NewMediaSession(laddr *net.UDPAddr) (s *MediaSession, e error) {
 	s = &MediaSession{
-		// Formats: formats,
+		Formats: sdp.Formats{
+			sdp.FORMAT_TYPE_ULAW, sdp.FORMAT_TYPE_ALAW,
+		},
 		Laddr: laddr,
 	}
 
-	if raddr != nil {
-		s.setRemoteAddr(raddr)
-	}
-
 	// Try to listen on this ports
-	if err := s.listen(); err != nil {
+	if err := s.createListeners(s.Laddr); err != nil {
 		return nil, err
 	}
 
@@ -139,41 +59,16 @@ func (s *MediaSession) setRemoteAddr(raddr *net.UDPAddr) {
 	s.rtcpRaddr.Port++
 }
 
-func (s *MediaSession) LocalSDP(fs Formats) []byte {
-	formats := make([]int, 0)
-	// TODO remove this conversion
-	if !fs.Alaw && !fs.Ulaw {
-		fs.Alaw, fs.Ulaw = true, true
-	}
-
-	if fs.Ulaw {
-		formats = append(formats, 0)
-	}
-
-	if fs.Alaw {
-		formats = append(formats, 8)
-	}
-	s.updateFormats(formats)
-
-	// TODO remove this conversions
-	for _, f := range s.Formats {
-		if f == 0 {
-			fs.Ulaw = true
-		}
-		if f == 8 {
-			fs.Alaw = true
-		}
-	}
-
+func (s *MediaSession) LocalSDP() []byte {
 	ip := s.Laddr.IP
 	rtpPort := s.Laddr.Port
 
-	return SDPGeneric(ip, ip, rtpPort, SDPModeSendrecv, fs)
+	return SDPGenerateForAudio(ip, ip, rtpPort, SDPModeSendrecv, s.Formats)
 }
 
 func (s *MediaSession) RemoteSDP(sdpReceived []byte) error {
-	sd := SessionDescription{}
-	if err := UnmarshalSDP(sdpReceived, &sd); err != nil {
+	sd := sdp.SessionDescription{}
+	if err := sdp.Unmarshal(sdpReceived, &sd); err != nil {
 		// p.log.Debug().Err(err).Msgf("Fail to parse SDP\n%q", string(r.Body()))
 		return fmt.Errorf("fail to parse received SDP: %w", err)
 	}
@@ -191,44 +86,14 @@ func (s *MediaSession) RemoteSDP(sdpReceived []byte) error {
 	raddr := &net.UDPAddr{IP: ci.IP, Port: md.Port}
 	s.setRemoteAddr(raddr)
 
-	// dstIP := ci.IP
-	// dstPort := md.Port
-	recvCodecs := md.Formats
-
-	// Check codecs but expect all send codecs are send
-	formats := make([]int, 0, cap(recvCodecs))
-	var parseErr error
-	for _, crStr := range recvCodecs {
-		cr, err := strconv.Atoi(crStr)
-		// keep going
-		if err != nil {
-			parseErr = errors.Join(parseErr, err)
-			continue
-		}
-
-		formats = append(formats, cr)
-	}
-
-	if len(formats) == 0 {
-		err := fmt.Errorf("No formats found")
-		return errors.Join(parseErr, err)
-	}
-
-	s.updateFormats(formats)
-
-	// if s.Raddr.IP.IsLoopback() {
-	// 	s.Laddr.IP = s.Raddr.IP
-	// 	s.Close()
-	// 	return s.listen()
-	// }
-
+	s.updateFormats(md.Formats)
 	return nil
 }
 
-func (s *MediaSession) updateFormats(formats []int) {
+func (s *MediaSession) updateFormats(formats sdp.Formats) {
 	// Check remote vs local
 	if len(s.Formats) > 0 {
-		filter := make([]int, 0, cap(formats))
+		filter := make([]string, 0, cap(formats))
 		for _, cs := range s.Formats {
 			for _, cr := range formats {
 				if cr == cs {
@@ -237,7 +102,7 @@ func (s *MediaSession) updateFormats(formats []int) {
 			}
 		}
 		// Update new list of formats
-		s.Formats = filter
+		s.Formats = sdp.Formats(filter)
 	} else {
 		s.Formats = formats
 	}
@@ -285,8 +150,7 @@ func (s *MediaSession) dial() error {
 }
 
 // Listen creates listeners instead
-func (s *MediaSession) listen() error {
-	laddr := s.Laddr
+func (s *MediaSession) createListeners(laddr *net.UDPAddr) error {
 	var err error
 
 	if laddr.Port == 0 && RTPPortStart > 0 && RTPPortEnd > RTPPortStart {
@@ -350,8 +214,8 @@ func (s *MediaSession) Close() {
 }
 
 func (s *MediaSession) UpdateDestinationSDP(sdpReceived []byte) error {
-	sd := SessionDescription{}
-	if err := UnmarshalSDP(sdpReceived, &sd); err != nil {
+	sd := sdp.SessionDescription{}
+	if err := sdp.Unmarshal(sdpReceived, &sd); err != nil {
 		// p.log.Debug().Err(err).Msgf("Fail to parse SDP\n%q", string(r.Body()))
 		return fmt.Errorf("fail to parse received SDP: %w", err)
 	}
@@ -366,12 +230,11 @@ func (s *MediaSession) UpdateDestinationSDP(sdpReceived []byte) error {
 		return err
 	}
 
+	// TODO fix race problem, but it is rare this to happen
 	s.Raddr.IP = ci.IP
 	s.Raddr.Port = md.Port
 
-	// TODO, we should maybe again check with our previous SDP?
-	// we will consider that update is considering sent codecs
-	s.Formats = selectFormats(md.Formats, md.Formats)
+	s.updateFormats(md.Formats)
 	return nil
 }
 

@@ -1,4 +1,4 @@
-package sipgox
+package sdp
 
 import (
 	"net"
@@ -36,7 +36,7 @@ a=rtcp-mux`
 
 	// Fails due to b=TIAS:64000
 	sd := SessionDescription{}
-	err := UnmarshalSDP([]byte(body), &sd)
+	err := Unmarshal([]byte(body), &sd)
 	require.NoError(t, err)
 
 	require.Equal(t, sd.Value("m"), "audio 57797 RTP/AVP 96 97 98 99 3 0 8 9 120 121 122")

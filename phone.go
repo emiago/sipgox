@@ -9,11 +9,13 @@ import (
 	"math/rand"
 	"net"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/emiago/sipgo"
 	"github.com/emiago/sipgo/sip"
+	"github.com/emiago/sipgox/sdp"
 	"github.com/icholy/digest"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -398,7 +400,8 @@ type DialOptions struct {
 	// Custom headers passed on INVITE
 	SipHeaders []sip.Header
 
-	Formats Formats
+	// SDP Formats to customize. NOTE: Only ulaw and alaw are fully supported
+	Formats sdp.Formats
 
 	// OnResponse is just callback called after INVITE is sent and all responses before final one
 	// Useful for tracking call state
@@ -465,13 +468,16 @@ func (p *Phone) Dial(dialCtx context.Context, recipient sip.Uri, o DialOptions) 
 	if lip := net.ParseIP(host); lip != nil && !lip.IsUnspecified() {
 		rtpIp = lip
 	}
-	msess, err := NewMediaSession(&net.UDPAddr{IP: rtpIp, Port: 0}, nil)
+	msess, err := NewMediaSession(&net.UDPAddr{IP: rtpIp, Port: 0})
 	if err != nil {
 		return nil, err
 	}
 
 	// Create Generic SDP
-	sdpSend := msess.LocalSDP(o.Formats)
+	if len(o.Formats) > 0 {
+		msess.Formats = o.Formats
+	}
+	sdpSend := msess.LocalSDP()
 
 	// Creating INVITE
 	req := sip.NewRequest(sip.INVITE, recipient)
@@ -552,7 +558,7 @@ func (p *Phone) Dial(dialCtx context.Context, recipient sip.Uri, o DialOptions) 
 		}
 
 		log.Info().
-			Str("formats", FormatsList(msess.Formats).String()).
+			Str("formats", logFormats(msess.Formats)).
 			Str("localAddr", msess.Laddr.String()).
 			Str("remoteAddr", msess.Raddr.String()).
 			Msg("Media/RTP session created")
@@ -598,7 +604,7 @@ type AnswerOptions struct {
 	RegisterAddr string //If defined it will keep registration in background
 
 	// For SDP codec manipulating
-	Formats Formats
+	Formats sdp.Formats
 
 	// OnCall is just INVITE request handler that you can use to notify about incoming call
 	// After this dialog should be created and you can watch your changes with dialog.State
@@ -927,9 +933,13 @@ func (p *Phone) answer(ansCtx context.Context, opts AnswerOptions) (*DialogServe
 				if lip := net.ParseIP(lhost); lip != nil && !lip.IsUnspecified() {
 					ip = lip
 				}
-				msess, err := NewMediaSession(&net.UDPAddr{IP: ip, Port: 0}, nil)
+				msess, err := NewMediaSession(&net.UDPAddr{IP: ip, Port: 0})
 				if err != nil {
 					return nil, nil, err
+				}
+				// Set our custom formats in this negotiation
+				if len(opts.Formats) > 0 {
+					msess.Formats = opts.Formats
 				}
 
 				err = msess.RemoteSDP(req.Body())
@@ -937,7 +947,7 @@ func (p *Phone) answer(ansCtx context.Context, opts AnswerOptions) (*DialogServe
 					return nil, nil, err
 				}
 
-				answerSD := msess.LocalSDP(opts.Formats)
+				answerSD := msess.LocalSDP()
 				return msess, answerSD, err
 			}()
 
@@ -946,7 +956,7 @@ func (p *Phone) answer(ansCtx context.Context, opts AnswerOptions) (*DialogServe
 			}
 
 			log.Info().
-				Ints("formats", msess.Formats).
+				Str("formats", logFormats(msess.Formats)).
 				Str("localAddr", msess.Laddr.String()).
 				Str("remoteAddr", msess.Raddr.String()).
 				Msg("Media/RTP session created")
@@ -1103,16 +1113,6 @@ func (p *Phone) AnswerWithCode(ansCtx context.Context, code sip.StatusCode, reas
 	return dialog, nil
 }
 
-func (p *Phone) generateSDP(ip net.IP, rtpPort int, f Formats) []byte {
-	if !f.Alaw && !f.Ulaw {
-		f = Formats{
-			Ulaw: true, // Enable only ulaw
-		}
-	}
-
-	return SDPGeneric(ip, ip, rtpPort, SDPModeSendrecv, f)
-}
-
 func getResponse(ctx context.Context, tx sip.ClientTransaction) (*sip.Response, error) {
 	select {
 	case <-tx.Done():
@@ -1122,4 +1122,20 @@ func getResponse(ctx context.Context, tx sip.ClientTransaction) (*sip.Response, 
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
+}
+
+func logFormats(f sdp.Formats) string {
+	out := make([]string, len(f))
+	for i, v := range f {
+		switch v {
+		case "0":
+			out[i] = "0(ulaw)"
+		case "8":
+			out[i] = "8(alaw)"
+		default:
+			// Unknown then just use as number
+			out[i] = v
+		}
+	}
+	return strings.Join(out, ",")
 }
