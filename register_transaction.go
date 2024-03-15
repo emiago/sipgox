@@ -29,8 +29,10 @@ func NewRegisterTransaction(log zerolog.Logger, client *sipgo.Client, recipient 
 	// log := p.getLoggerCtx(ctx, "Register")
 	req := sip.NewRequest(sip.REGISTER, recipient)
 	req.AppendHeader(&contact)
-	expires := sip.ExpiresHeader(expiry)
-	req.AppendHeader(&expires)
+	if expiry > 0 {
+		expires := sip.ExpiresHeader(expiry)
+		req.AppendHeader(&expires)
+	}
 	if allowHDRS != nil {
 		req.AppendHeader(sip.NewHeader("Allow", strings.Join(allowHDRS, ", ")))
 	}

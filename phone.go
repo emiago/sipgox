@@ -200,6 +200,9 @@ func (p *Phone) createServerListener(s *sipgo.Server, a ListenAddr) (*Listener, 
 			return nil, fmt.Errorf("listen udp error. err=%w", err)
 		}
 
+		// Port can be dynamic
+		a.Addr = udpConn.LocalAddr().String()
+
 		return &Listener{
 			a,
 			udpConn,
@@ -217,6 +220,7 @@ func (p *Phone) createServerListener(s *sipgo.Server, a ListenAddr) (*Listener, 
 			return nil, fmt.Errorf("listen tcp error. err=%w", err)
 		}
 
+		a.Addr = conn.Addr().String()
 		// and uses listener to buffer
 		if network == "ws" {
 			return &Listener{

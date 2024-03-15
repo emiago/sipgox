@@ -1,6 +1,7 @@
 package sipgox
 
 import (
+	"encoding/binary"
 	"fmt"
 	"io"
 	"net"
@@ -11,6 +12,8 @@ import (
 	"github.com/emiago/sipgox/sdp"
 	"github.com/pion/rtcp"
 	"github.com/pion/rtp"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 )
 
 var (
@@ -18,6 +21,9 @@ var (
 	RTPPortStart  = 0
 	RTPPortEnd    = 0
 	rtpPortOffset = atomic.Int32{}
+
+	RTPDebug  = false
+	RTCPDebug = false
 )
 
 type MediaSession struct {
@@ -34,6 +40,8 @@ type MediaSession struct {
 	// Depending of negotiation this can change
 	// Not thread safe
 	Formats sdp.Formats
+
+	log zerolog.Logger
 }
 
 func NewMediaSession(laddr *net.UDPAddr) (s *MediaSession, e error) {
@@ -42,6 +50,7 @@ func NewMediaSession(laddr *net.UDPAddr) (s *MediaSession, e error) {
 			sdp.FORMAT_TYPE_ULAW, sdp.FORMAT_TYPE_ALAW,
 		},
 		Laddr: laddr,
+		log:   log.With().Str("caller", "media").Logger(),
 	}
 
 	// Try to listen on this ports
@@ -248,7 +257,14 @@ func (m *MediaSession) ReadRTP() (rtp.Packet, error) {
 		return p, err
 	}
 
-	return p, p.Unmarshal(buf[:n])
+	if err := p.Unmarshal(buf[:n]); err != nil {
+		return p, err
+	}
+
+	if RTPDebug {
+		m.log.Debug().Msgf("Recv RTP\n%s", p.String())
+	}
+	return p, err
 }
 
 func (m *MediaSession) ReadRTPWithDeadline(t time.Time) (rtp.Packet, error) {
@@ -291,6 +307,10 @@ func (m *MediaSession) ReadRTCPRaw(buf []byte) (int, error) {
 }
 
 func (m *MediaSession) WriteRTP(p *rtp.Packet) error {
+	if RTPDebug {
+		m.log.Debug().Msgf("RTP write:\n%s", p.String())
+	}
+
 	data, err := p.Marshal()
 	if err != nil {
 		return err
@@ -314,6 +334,12 @@ func (m *MediaSession) WriteRTP(p *rtp.Packet) error {
 }
 
 func (m *MediaSession) WriteRTCP(p rtcp.Packet) error {
+	if RTCPDebug {
+		if sr, ok := p.(fmt.Stringer); ok {
+			m.log.Debug().Msgf("RTCP write: \n%s", sr.String())
+		}
+	}
+
 	data, err := p.Marshal()
 	if err != nil {
 		return err
@@ -368,4 +394,96 @@ func selectFormats(sendCodecs []string, recvCodecs []string) []int {
 		}
 	}
 	return formats
+}
+
+// DTMF event mapping (RFC 4733)
+var dtmfEventMapping = map[rune]byte{
+	'0': 0,
+	'1': 1,
+	'2': 2,
+	'3': 3,
+	'4': 4,
+	'5': 5,
+	'6': 6,
+	'7': 7,
+	'8': 8,
+	'9': 9,
+	'*': 10,
+	'#': 11,
+	'A': 12,
+	'B': 13,
+	'C': 14,
+	'D': 15,
+}
+
+func RTPDTMFEncode(char rune) []DTMFEvent {
+	event := dtmfEventMapping[char]
+
+	events := make([]DTMFEvent, 7)
+
+	for i := 0; i < 4; i++ {
+		d := DTMFEvent{
+			Event:      event,
+			EndOfEvent: false,
+			Volume:     10,
+			Duration:   160 * (uint16(i) + 1),
+		}
+		events[i] = d
+	}
+
+	// End events. Took this from linphone example, but not clear why sending this many
+	for i := 4; i < 7; i++ {
+		d := DTMFEvent{
+			Event:      event,
+			EndOfEvent: true,
+			Volume:     10,
+			Duration:   160 * 5, // Must not be increased for end event
+		}
+		events[i] = d
+	}
+
+	return events
+}
+
+// DTMFEvent represents a DTMF event
+type DTMFEvent struct {
+	Event      uint8
+	EndOfEvent bool
+	Volume     uint8
+	Duration   uint16
+}
+
+func (ev *DTMFEvent) String() string {
+	out := "RTP DTMF Event:\n"
+	out += fmt.Sprintf("\tEvent: %d\n", ev.Event)
+	out += fmt.Sprintf("\tEndOfEvent: %v\n", ev.EndOfEvent)
+	out += fmt.Sprintf("\tVolume: %d\n", ev.Volume)
+	out += fmt.Sprintf("\tDuration: %d\n", ev.Duration)
+	return out
+}
+
+// DecodeRTPPayload decodes an RTP payload into a DTMF event
+func DTMFDecode(payload []byte, d *DTMFEvent) error {
+	if len(payload) < 4 {
+		return fmt.Errorf("payload too short")
+	}
+
+	d.Event = payload[0]
+	d.EndOfEvent = payload[1]&0x80 != 0
+	d.Volume = payload[1] & 0x7F
+	d.Duration = binary.BigEndian.Uint16(payload[2:4])
+	// d.Duration = uint16(payload[2])<<8 | uint16(payload[3])
+	return nil
+}
+
+func DTMFEncode(d DTMFEvent) []byte {
+	header := make([]byte, 4)
+	header[0] = d.Event
+
+	if d.EndOfEvent {
+		header[1] = 0x80
+	}
+	header[1] |= d.Volume & 0x3F
+	binary.BigEndian.PutUint16(header[2:4], d.Duration)
+	return header
 }

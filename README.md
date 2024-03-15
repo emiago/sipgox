@@ -19,10 +19,10 @@ Features:
 - [x] Hangup control on caller
 - [x] Timeouts handling
 - [x] Digest auth
+- [x] DTMF encoder, decoder via RFC4733
 - [ ] Transfers on answer, dial
 - [ ] SDP codec fields manipulating
 - [ ] SDP negotiation fail
-- [ ] DTMF passing
 
 
 Checkout `echome` example to see more. 
