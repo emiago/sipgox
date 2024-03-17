@@ -61,6 +61,10 @@ func NewMediaSession(laddr *net.UDPAddr) (s *MediaSession, e error) {
 	return s, nil
 }
 
+func (s *MediaSession) SetLogger(log zerolog.Logger) {
+	s.log = log
+}
+
 func (s *MediaSession) setRemoteAddr(raddr *net.UDPAddr) {
 	s.Raddr = raddr
 	s.rtcpRaddr = new(net.UDPAddr)
