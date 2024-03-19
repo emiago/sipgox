@@ -1,12 +1,13 @@
 # sipgox
 
-is experimental/extra area to add more functionality on top [sipgo lib](https://github.com/emiago/sipgo)
+is experimental/extra area to add more functionality on top [sipgo lib](https://github.com/emiago/sipgo), more specifically fill gap for building user agents with media.
+
 
 If use it in your projects consider that this repo will not have stable code until it is considered merging to `sipgo stack`
 
 If you find useful, support/sponsor [sipgo lib](https://github.com/emiago/sipgo), open issue etc...
 
-Here you can find [docs](https://pkg.go.dev/github.com/emiago/sipgox)
+Here you can find [GO Documentation](https://pkg.go.dev/github.com/emiago/sipgox)
 
 Tools using this lib:
 - [gophone](https://github.com/emiago/gophone)
@@ -20,7 +21,7 @@ Features:
 - [x] Timeouts handling
 - [x] Digest auth
 - [x] DTMF encoder, decoder via RFC4733
-- [ ] Transfers on answer, dial
+- [ ] Transfers on phone answer, dial
 - [ ] SDP codec fields manipulating
 - [ ] SDP negotiation fail
 
@@ -30,7 +31,9 @@ Checkout `echome` example to see more.
 
 ## Phone
 
-Phone is wrapper that can make you easy build phone, create/receive SIP call, handle RTP/RTCP.
+Phone is wrapper that can make you to build fast phone, create/receive SIP call, handle RTP/RTCP. It uses `sipgo.Dialog` and adds **media handling** on top. 
+
+It has specific design, and it can not be used for full softphone build.
 
 ### Dialer
 
