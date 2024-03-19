@@ -4,14 +4,6 @@ import (
 	"github.com/pion/rtp"
 )
 
-// ALawPayloader implements the rtp.Payloader interface for A-law encoding.
-type rtpPayloader struct{}
-
-func (r rtpPayloader) Payload(mtu uint16, payload []byte) [][]byte {
-	// This will always create a MARKER
-	return [][]byte{payload}
-}
-
 // RTP Writer packetize any payload before pushing to active media session
 type RTPWriter struct {
 	Sess *MediaSession
