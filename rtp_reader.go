@@ -10,7 +10,7 @@ import (
 type RTPReader struct {
 	Sess *MediaSession
 
-	OnRTP       func(pkt rtp.Packet)
+	OnRTP       func(pkt *rtp.Packet)
 	LastPacket  rtp.Packet // After calling Read this will be stored before returning
 	PayloadType uint8
 
@@ -54,7 +54,7 @@ func (r *RTPReader) Read(b []byte) (int, error) {
 
 	r.LastPacket = pkt
 	if r.OnRTP != nil {
-		r.OnRTP(pkt)
+		r.OnRTP(&pkt)
 	}
 
 	return r.readPayload(b, pkt.Payload), nil

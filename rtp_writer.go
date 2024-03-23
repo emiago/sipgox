@@ -18,6 +18,7 @@ type RTPWriter struct {
 
 	// After each write this is set as packet.
 	LastPacket rtp.Packet
+	OnRTP      func(pkt *rtp.Packet)
 }
 
 // RTP writer wraps payload in RTP packet before passing on session
@@ -46,8 +47,8 @@ func (p *RTPWriter) Write(b []byte) (int, error) {
 			Extension:      false,
 			Marker:         p.lastTimestamp == 0,
 			PayloadType:    p.PayloadType,
-			SequenceNumber: p.seq.NextSequenceNumber(),
 			Timestamp:      p.lastTimestamp, // Figure out how to do timestamps
+			SequenceNumber: p.seq.NextSequenceNumber(),
 			SSRC:           p.SSRC,
 			CSRC:           []uint32{},
 		},
@@ -55,6 +56,10 @@ func (p *RTPWriter) Write(b []byte) (int, error) {
 	}
 	p.LastPacket = pkt
 	p.lastTimestamp += p.SamplesRate
+
+	if p.OnRTP != nil {
+		p.OnRTP(&pkt)
+	}
 
 	err := p.Sess.WriteRTP(&pkt)
 	return len(pkt.Payload), err
