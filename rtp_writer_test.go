@@ -41,7 +41,7 @@ func TestRTPWriter(t *testing.T) {
 
 		require.Equal(t, rtpWriter.PayloadType, pkt.PayloadType)
 		require.Equal(t, rtpWriter.SSRC, pkt.SSRC)
-		require.Equal(t, rtpWriter.lastTimestamp, pkt.Timestamp+160, "%d vs %d", rtpWriter.lastTimestamp, pkt.Timestamp)
+		require.Equal(t, rtpWriter.nextTimestamp, pkt.Timestamp+160, "%d vs %d", rtpWriter.nextTimestamp, pkt.Timestamp)
 		require.Equal(t, i == 0, pkt.Marker)
 		require.Equal(t, len(payload), len(pkt.Payload))
 	}
