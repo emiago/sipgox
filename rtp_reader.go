@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/pion/rtp"
+	"github.com/rs/zerolog/log"
 )
 
 // RTP Writer packetize any payload before pushing to active media session
@@ -36,7 +37,8 @@ func NewRTPReader(sess *MediaSession) *RTPReader {
 	return &w
 }
 
-// Implements io.Reader
+// Read Implements io.Reader and extracts Payload from RTP packet
+// has no input queue or sorting control of packets
 func (r *RTPReader) Read(b []byte) (int, error) {
 	if r.unread > 0 {
 		n := r.readPayload(b, r.unreadPayload)
@@ -49,7 +51,15 @@ func (r *RTPReader) Read(b []byte) (int, error) {
 	}
 
 	if r.PayloadType != pkt.PayloadType {
-		return 0, fmt.Errorf("Payload type does not match. expected=%d, actual=%d", r.PayloadType, pkt.PayloadType)
+		return 0, fmt.Errorf("payload type does not match. expected=%d, actual=%d", r.PayloadType, pkt.PayloadType)
+	}
+
+	// First packet
+	if r.LastPacket.SSRC != 0 {
+		expectedSeq := r.LastPacket.SequenceNumber + 1
+		if pkt.SequenceNumber != expectedSeq {
+			log.Warn().Msg("Out of order pkt received")
+		}
 	}
 
 	r.LastPacket = pkt

@@ -179,7 +179,7 @@ func (p *Phone) getInterfaceHostPort(network string, targetAddr string) (ipstr s
 	}
 
 	if port == 0 {
-		return ipstr, port, fmt.Errorf("Failed to find free port")
+		return ipstr, port, fmt.Errorf("failed to find free port")
 	}
 
 	return ip.String(), port, err
@@ -236,7 +236,7 @@ func (p *Phone) createServerListener(s *sipgo.Server, a ListenAddr) (*Listener, 
 			func() error { return s.ServeTCP(conn) },
 		}, nil
 	}
-	return nil, fmt.Errorf("Unsuported protocol")
+	return nil, fmt.Errorf("unsuported protocol")
 }
 
 func (p *Phone) createServerListeners(s *sipgo.Server) (listeners []*Listener, e error) {
@@ -515,17 +515,12 @@ func (p *Phone) Dial(dialCtx context.Context, recipient sip.Uri, o DialOptions) 
 		if err != nil {
 			return nil, err
 		}
-
-		log.Info().
-			Str("Call-ID", req.CallID().Value()).
-			// Str("FromAddr", req.From().Address.Addr()).
-			// Str("ToAddr", req.To().Address.Addr()).
-			Msgf("Request: %s", req.StartLine())
+		logRequest(&log, req)
 
 		// Wait 200
 		err = dialog.WaitAnswer(ctx, sipgo.AnswerOptions{
 			OnResponse: func(res *sip.Response) {
-				log.Info().Msgf("Response: %s", res.StartLine())
+				logResponse(&log, res)
 				if o.OnResponse != nil {
 					o.OnResponse(res)
 				}
@@ -626,11 +621,12 @@ type AnswerOptions struct {
 // Closing ansCtx will close listeners or it will be closed on BYE
 // TODO: reusing listener
 func (p *Phone) Answer(ansCtx context.Context, opts AnswerOptions) (*DialogServerSession, error) {
+
 	dialog, err := p.answer(ansCtx, opts)
 	if err != nil {
 		return nil, err
 	}
-
+	log.Debug().Msg("Dialog answer created")
 	if !dialog.InviteResponse.IsSuccess() {
 		// Return closed/terminated dialog
 		return dialog, dialog.Close()
@@ -828,9 +824,7 @@ func (p *Phone) answer(ansCtx context.Context, opts AnswerOptions) (*DialogServe
 			}
 			log.Info().Str("username", cred.Username).Str("source", req.Source()).Msg("INVITE authorized")
 		}
-
-		from := req.From()
-		log.Info().Str("Call-ID", req.CallID().Value()).Str("from", from.Value()).Msgf("Request: %s", req.StartLine())
+		logRequest(&log, req)
 
 		dialog, err := ds.ReadInvite(req, tx)
 		if err != nil {
@@ -880,7 +874,7 @@ func (p *Phone) answer(ansCtx context.Context, opts AnswerOptions) (*DialogServe
 					d = nil
 					return fmt.Errorf("failed to respond custom status code %d: %w", int(opts.AnswerCode), err)
 				}
-				log.Info().Msgf("Response: %s", dialog.InviteResponse.StartLine())
+				logResponse(&log, dialog.InviteResponse)
 
 				d = &DialogServerSession{
 					DialogServerSession: dialog,
@@ -888,10 +882,18 @@ func (p *Phone) answer(ansCtx context.Context, opts AnswerOptions) (*DialogServe
 				}
 				select {
 				case <-tx.Done():
+					return tx.Err()
 				case <-tx.Acks():
+					log.Debug().Msg("ACK received. Returning dialog")
 					// Wait for ack
-					waitDialog <- d
 				case <-ctx.Done():
+					return ctx.Err()
+				}
+
+				select {
+				case waitDialog <- d:
+				case <-ctx.Done():
+					return ctx.Err()
 				}
 				return nil
 			}
@@ -906,7 +908,7 @@ func (p *Phone) answer(ansCtx context.Context, opts AnswerOptions) (*DialogServe
 				if err := dialog.WriteResponse(res); err != nil {
 					return fmt.Errorf("failed to send 180 response: %w", err)
 				}
-				log.Info().Msgf("Response: %s", res.StartLine())
+				logResponse(&log, res)
 
 				select {
 				case <-tx.Cancels():
@@ -925,7 +927,7 @@ func (p *Phone) answer(ansCtx context.Context, opts AnswerOptions) (*DialogServe
 					return fmt.Errorf("failed to send 100 response: %w", err)
 				}
 
-				log.Info().Msgf("Response: %s", res.StartLine())
+				logResponse(&log, res)
 			}
 
 			// Setup media
@@ -956,7 +958,7 @@ func (p *Phone) answer(ansCtx context.Context, opts AnswerOptions) (*DialogServe
 			}()
 
 			if err != nil {
-				return fmt.Errorf("Fail to setup media session: %w", err)
+				return fmt.Errorf("fail to setup media session: %w", err)
 			}
 
 			log.Info().
@@ -985,9 +987,9 @@ func (p *Phone) answer(ansCtx context.Context, opts AnswerOptions) (*DialogServe
 			log.Info().Msg("Answering call")
 			if err := dialog.WriteResponse(res); err != nil {
 				d = nil
-				return fmt.Errorf("Fail to send 200 response: %w", err)
+				return fmt.Errorf("fail to send 200 response: %w", err)
 			}
-			log.Info().Msgf("Response: %s", res.StartLine())
+			logResponse(&log, res)
 
 			// FOR ASTERISK YOU NEED TO REPLY WITH SAME RECIPIENT
 			// IN CASE PROXY AND IN DIALOG handling this must be contact address -.-
@@ -1009,7 +1011,7 @@ func (p *Phone) answer(ansCtx context.Context, opts AnswerOptions) (*DialogServe
 			}
 
 			if err := tx.Err(); err != nil {
-				return fmt.Errorf("Invite transaction ended with error: %w", err)
+				return fmt.Errorf("invite transaction ended with error: %w", err)
 			}
 			return nil
 		}()
@@ -1030,12 +1032,12 @@ func (p *Phone) answer(ansCtx context.Context, opts AnswerOptions) (*DialogServe
 				return
 			}
 
-			exitError(fmt.Errorf("Received ack but no dialog"))
+			exitError(fmt.Errorf("received ack but no dialog"))
 			stopAnswer()
 		}
 
 		if err := ds.ReadAck(req, tx); err != nil {
-			exitError(fmt.Errorf("Dialog ACK err: %w", err))
+			exitError(fmt.Errorf("dialog ACK err: %w", err))
 			stopAnswer()
 			return
 		}
@@ -1052,7 +1054,7 @@ func (p *Phone) answer(ansCtx context.Context, opts AnswerOptions) (*DialogServe
 
 	server.OnBye(func(req *sip.Request, tx sip.ServerTransaction) {
 		if err := ds.ReadBye(req, tx); err != nil {
-			exitError(fmt.Errorf("Dialog BYE err: %w", err))
+			exitError(fmt.Errorf("dialog BYE err: %w", err))
 			return
 		}
 
@@ -1142,4 +1144,17 @@ func logFormats(f sdp.Formats) string {
 		}
 	}
 	return strings.Join(out, ",")
+}
+
+// TODO allow this to be reformated outside
+func logRequest(log *zerolog.Logger, req *sip.Request) {
+	log.Info().
+		Str("callID", req.CallID().Value()).
+		Str("request", req.StartLine()).
+		Str("from", req.From().Value()).
+		Msg("Request")
+}
+
+func logResponse(log *zerolog.Logger, res *sip.Response) {
+	log.Info().Str("response", res.StartLine()).Msg("Response")
 }

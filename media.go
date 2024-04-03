@@ -107,13 +107,22 @@ func (s *MediaSession) updateFormats(formats sdp.Formats) {
 	// Check remote vs local
 	if len(s.Formats) > 0 {
 		filter := make([]string, 0, cap(formats))
-		for _, cs := range s.Formats {
-			for _, cr := range formats {
+		// Always prefer remote side?
+		for _, cr := range formats {
+			for _, cs := range s.Formats {
 				if cr == cs {
 					filter = append(filter, cr)
 				}
 			}
 		}
+
+		// for _, cs := range s.Formats {
+		// 	for _, cr := range formats {
+		// 		if cr == cs {
+		// 			filter = append(filter, cr)
+		// 		}
+		// 	}
+		// }
 		// Update new list of formats
 		s.Formats = sdp.Formats(filter)
 	} else {
