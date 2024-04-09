@@ -1,6 +1,8 @@
 package sipgox
 
 import (
+	"math/rand"
+
 	"github.com/pion/rtp"
 )
 
@@ -39,7 +41,7 @@ func NewRTPWriter(sess *MediaSession) *RTPWriter {
 		seq:         rtp.NewRandomSequencer(),
 		PayloadType: payloadType,
 		ClockRate:   uint32(sampleRate * 20 / 1000), // 20ms 0.02 * 8000 = 160
-		SSRC:        111222,
+		SSRC:        rand.Uint32(),
 
 		// TODO: CSRC CSRC is contribution source identifiers.
 		// This is set when media is passed trough mixer/translators and original SSRC wants to be preserverd
