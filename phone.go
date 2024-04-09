@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math/rand"
 	"net"
 	"strconv"
 	"strings"
@@ -142,49 +141,6 @@ func (p *Phone) getInterfaceAddr(network string, targetAddr string) (addr string
 	return net.JoinHostPort(host, strconv.Itoa(port)), nil
 }
 
-func (p *Phone) getInterfaceHostPort(network string, targetAddr string) (ipstr string, port int, err error) {
-	for _, a := range p.listenAddrs {
-		if a.Network == network {
-			return sip.ParseAddr(a.Addr)
-		}
-	}
-
-	// Go with random
-	// use empheral instead of this
-	ip, err := resolveHostIPWithTarget(network, targetAddr)
-	if err != nil {
-		return ipstr, port, err
-	}
-	switch network {
-	case "udp":
-		var l *net.UDPConn
-		l, err = net.ListenUDP("udp", &net.UDPAddr{IP: ip})
-		if err != nil {
-			return
-		}
-		l.Close()
-		// defer l.Close()
-		port = l.LocalAddr().(*net.UDPAddr).Port
-
-	case "tcp", "ws", "tls", "wss":
-		var l *net.TCPListener
-		l, err = net.ListenTCP("tcp", &net.TCPAddr{IP: ip})
-		if err != nil {
-			return
-		}
-		defer l.Close()
-		port = l.Addr().(*net.TCPAddr).Port
-	default:
-		port = rand.Intn(9999) + 6000
-	}
-
-	if port == 0 {
-		return ipstr, port, fmt.Errorf("failed to find free port")
-	}
-
-	return ip.String(), port, err
-}
-
 func (p *Phone) createServerListener(s *sipgo.Server, a ListenAddr) (*Listener, error) {
 
 	network, addr := a.Network, a.Addr
@@ -271,6 +227,39 @@ func (p *Phone) createServerListeners(s *sipgo.Server) (listeners []*Listener, e
 		}
 	}
 	return listeners, nil
+}
+
+func (p *Phone) getInterfaceHostPort(network string, targetAddr string) (host string, port int, err error) {
+	for _, a := range p.listenAddrs {
+		if a.Network == network {
+			host, port, err = sip.ParseAddr(a.Addr)
+			if err != nil {
+				return
+			}
+
+			// What is with port
+			// If user provides this 127.0.0.1:0 -> then this tell us to use random port
+			// If user provides this non IP then port will stay empty
+			if port != 0 {
+				return
+			}
+
+			ip := net.ParseIP(host)
+			if ip != nil {
+				port, err = findFreePort(network, ip)
+				return
+			}
+
+			// port = sip.DefaultPort(network)
+			return
+		}
+	}
+
+	ip, port, err := FindFreeInterfaceHostPort(network, targetAddr)
+	if err != nil {
+		return "", 0, err
+	}
+	return ip.String(), port, nil
 }
 
 var (
@@ -436,21 +425,28 @@ func (p *Phone) Dial(dialCtx context.Context, recipient sip.Uri, o DialOptions) 
 
 	// We need to listen as long our answer context is running
 	// Listener needs to be alive even after we have created dialog
-	listeners, err := p.createServerListeners(server)
+	// listeners, err := p.createServerListeners(server)
+	// if err != nil {
+	// 	return nil, err
+	// }
+	// host, listenPort, _ := sip.ParseAddr(listeners[0].Addr)
+
+	// NOTE: this can return empty port, in this case we probably have hostname
+	host, port, err := p.getInterfaceHostPort(network, recipient.HostPort())
 	if err != nil {
 		return nil, err
 	}
 
-	host, listenPort, _ := sip.ParseAddr(listeners[0].Addr)
 	contactHDR := sip.ContactHeader{
-		Address: sip.Uri{User: p.UA.Name(), Host: host, Port: listenPort},
+		Address: sip.Uri{User: p.UA.Name(), Host: host, Port: port},
 		Params:  sip.HeaderParams{"transport": network},
 	}
 
+	// We will force client to use same interface and port as defined for contact header
+	// The problem could be if this is required to be different, but for now keeping phone simple
 	client, err := sipgo.NewClient(p.UA,
-		// We must have this address for Contact header
 		sipgo.WithClientHostname(host),
-		// sipgo.WithClientPort(listenPort), // We can enforce port for all transports. It can only be done for UDP
+		sipgo.WithClientPort(port),
 	)
 	if err != nil {
 		return nil, err
@@ -496,16 +492,16 @@ func (p *Phone) Dial(dialCtx context.Context, recipient sip.Uri, o DialOptions) 
 	}
 
 	// Start server
-	for _, l := range listeners {
-		log.Info().Str("network", l.Network).Str("addr", l.Addr).Msg("Listening on")
-		go l.Listen()
-	}
+	// for _, l := range listeners {
+	// 	log.Info().Str("network", l.Network).Str("addr", l.Addr).Msg("Listening on")
+	// 	go l.Listen()
+	// }
 
 	stopDial := sync.OnceFunc(func() {
-		for _, l := range listeners {
-			log.Debug().Str("addr", l.Addr).Msg("Closing listener")
-			l.Close()
-		}
+		// for _, l := range listeners {
+		// 	log.Debug().Str("addr", l.Addr).Msg("Closing listener")
+		// 	l.Close()
+		// }
 	})
 
 	// TODO move this out
@@ -930,35 +926,29 @@ func (p *Phone) answer(ansCtx context.Context, opts AnswerOptions) (*DialogServe
 				logResponse(&log, res)
 			}
 
-			// Setup media
-			msess, answerSD, err := func() (*MediaSession, []byte, error) {
-				// for {
-				// Now generate answer with our rtp ports
-				ip := p.UA.GetIP()
-				// rtpPort := rand.Intn(1000*2)/2 + 6000
-				if lip := net.ParseIP(lhost); lip != nil && !lip.IsUnspecified() {
-					ip = lip
-				}
-				msess, err := NewMediaSession(&net.UDPAddr{IP: ip, Port: 0})
-				if err != nil {
-					return nil, nil, err
-				}
-				// Set our custom formats in this negotiation
-				if len(opts.Formats) > 0 {
-					msess.Formats = opts.Formats
-				}
+			contentType := req.ContentType()
+			if contentType == nil || contentType.Value() != "application/sdp" {
+				return fmt.Errorf("no SDP in INVITE provided")
+			}
 
-				err = msess.RemoteSDP(req.Body())
-				if err != nil {
-					return nil, nil, err
-				}
+			ip := p.UA.GetIP()
+			// rtpPort := rand.Intn(1000*2)/2 + 6000
+			if lip := net.ParseIP(lhost); lip != nil && !lip.IsUnspecified() {
+				ip = lip
+			}
 
-				answerSD := msess.LocalSDP()
-				return msess, answerSD, err
-			}()
-
+			msess, err := NewMediaSession(&net.UDPAddr{IP: ip, Port: 0})
 			if err != nil {
-				return fmt.Errorf("fail to setup media session: %w", err)
+				return err
+			}
+			// Set our custom formats in this negotiation
+			if len(opts.Formats) > 0 {
+				msess.Formats = opts.Formats
+			}
+
+			err = msess.RemoteSDP(req.Body())
+			if err != nil {
+				return err
 			}
 
 			log.Info().
@@ -967,7 +957,8 @@ func (p *Phone) answer(ansCtx context.Context, opts AnswerOptions) (*DialogServe
 				Str("remoteAddr", msess.Raddr.String()).
 				Msg("Media/RTP session created")
 
-			res := sip.NewSDPResponseFromRequest(req, answerSD)
+			res := sip.NewSDPResponseFromRequest(req, msess.LocalSDP())
+
 			// via, _ := res.Via()
 			// via.Params["received"] = rhost
 			// via.Params["rport"] = strconv.Itoa(rport)

@@ -42,27 +42,10 @@ func FindFreeInterfaceHostPort(network string, targetAddr string) (ip net.IP, po
 	if err != nil {
 		return ip, port, err
 	}
-	switch network {
-	case "udp":
-		var l *net.UDPConn
-		l, err = net.ListenUDP("udp", &net.UDPAddr{IP: ip})
-		if err != nil {
-			return
-		}
-		l.Close()
-		// defer l.Close()
-		port = l.LocalAddr().(*net.UDPAddr).Port
 
-	case "tcp", "ws", "tls", "wss":
-		var l *net.TCPListener
-		l, err = net.ListenTCP("tcp", &net.TCPAddr{IP: ip})
-		if err != nil {
-			return
-		}
-		defer l.Close()
-		port = l.Addr().(*net.TCPAddr).Port
-	default:
-		port = rand.Intn(9999) + 6000
+	port, err = findFreePort(network, ip)
+	if err != nil {
+		return
 	}
 
 	if port == 0 {
@@ -70,4 +53,31 @@ func FindFreeInterfaceHostPort(network string, targetAddr string) (ip net.IP, po
 	}
 
 	return ip, port, err
+}
+
+func findFreePort(network string, ip net.IP) (int, error) {
+	switch network {
+	case "udp":
+		var l *net.UDPConn
+		l, err := net.ListenUDP("udp", &net.UDPAddr{IP: ip})
+		if err != nil {
+			return 0, err
+		}
+		l.Close()
+		// defer l.Close()
+		port := l.LocalAddr().(*net.UDPAddr).Port
+		return port, nil
+
+	case "tcp", "ws", "tls", "wss":
+		var l *net.TCPListener
+		l, err := net.ListenTCP("tcp", &net.TCPAddr{IP: ip})
+		if err != nil {
+			return 0, err
+		}
+		defer l.Close()
+		port := l.Addr().(*net.TCPAddr).Port
+		return port, nil
+	default:
+		return rand.Intn(9999) + 6000, nil
+	}
 }
