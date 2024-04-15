@@ -23,16 +23,19 @@ func CheckLazySipUri(target string, destOverwrite string) string {
 }
 
 func resolveHostIPWithTarget(network string, targetAddr string) (net.IP, error) {
+	tip, _, _ := sip.ParseAddr(targetAddr)
+	ip := net.ParseIP(tip)
+
 	if network == "udp" {
-		tip, _, _ := sip.ParseAddr(targetAddr)
-		if ip := net.ParseIP(tip); ip != nil {
+		if ip != nil {
 			if ip.IsLoopback() {
 				// TO avoid UDP COnnected connection problem hitting different subnet
 				return net.ParseIP("127.0.0.99"), nil
 			}
 		}
 	}
-	return sip.ResolveSelfIP()
+	rip, _, err := sip.ResolveInterfacesIP("ip4", nil)
+	return rip, err
 }
 
 func FindFreeInterfaceHostPort(network string, targetAddr string) (ip net.IP, port int, err error) {

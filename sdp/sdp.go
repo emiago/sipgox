@@ -117,6 +117,20 @@ func (sd SessionDescription) ConnectionInformation() (ci ConnectionInformation, 
 	ci.AddressType = fields[1]
 	addr := strings.Split(fields[2], "/")
 	ci.IP = net.ParseIP(addr[0])
+
+	switch ci.AddressType {
+	case "IP4":
+		ci.IP = ci.IP.To4()
+		if ci.IP == nil {
+			return ci, fmt.Errorf("failed to convert to IP4")
+		}
+	case "IP6":
+		ci.IP = ci.IP.To16()
+		if ci.IP == nil {
+			return ci, fmt.Errorf("failed to convert to IP4")
+		}
+	}
+
 	if len(addr) > 1 {
 		ci.TTL, _ = strconv.Atoi(addr[1])
 	}
