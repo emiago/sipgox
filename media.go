@@ -329,13 +329,7 @@ func (m *MediaSession) WriteRTP(p *rtp.Packet) error {
 		return err
 	}
 
-	var n int
-	if m.rtpConnectedConn != nil {
-		n, err = m.rtpConnectedConn.Write(data)
-	} else {
-		n, err = m.rtpConn.WriteTo(data, m.Raddr)
-	}
-
+	n, err := m.WriteRTPRaw(data)
 	if err != nil {
 		return err
 	}
@@ -344,6 +338,15 @@ func (m *MediaSession) WriteRTP(p *rtp.Packet) error {
 		return io.ErrShortWrite
 	}
 	return nil
+}
+
+func (m *MediaSession) WriteRTPRaw(data []byte) (n int, err error) {
+	if m.rtpConnectedConn != nil {
+		n, err = m.rtpConnectedConn.Write(data)
+	} else {
+		n, err = m.rtpConn.WriteTo(data, m.Raddr)
+	}
+	return
 }
 
 func (m *MediaSession) WriteRTCP(p rtcp.Packet) error {

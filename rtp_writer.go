@@ -12,9 +12,11 @@ type RTPWriter struct {
 
 	seq rtp.Sequencer
 
+	// Some defaults, can be overriten only after creating writer
 	PayloadType uint8
 	SSRC        uint32
 	ClockRate   uint32
+	// MTU         uint32
 
 	nextTimestamp uint32
 
@@ -42,6 +44,7 @@ func NewRTPWriter(sess *MediaSession) *RTPWriter {
 		PayloadType: payloadType,
 		ClockRate:   uint32(sampleRate * 20 / 1000), // 20ms 0.02 * 8000 = 160
 		SSRC:        rand.Uint32(),
+		// MTU:         1500,
 
 		// TODO: CSRC CSRC is contribution source identifiers.
 		// This is set when media is passed trough mixer/translators and original SSRC wants to be preserverd
@@ -62,48 +65,25 @@ func NewRTPWriter(sess *MediaSession) *RTPWriter {
 func (p *RTPWriter) Write(b []byte) (int, error) {
 	// b is our frame
 	// Spliting into multiple:
+
+	// FRAGMENTATION WITHIN MTU
 	// multiple frame packets should preserve same timestamp
-
-	pkt := rtp.Packet{
-		Header: rtp.Header{
-			Version:     2,
-			Padding:     false,
-			Extension:   false,
-			Marker:      p.nextTimestamp == 0,
-			PayloadType: p.PayloadType,
-			// Timestamp should increase linear and monotonic for media clock
-			// Payload must be in same clock rate
-			// TODO: what about wrapp arround
-			Timestamp: p.nextTimestamp,
-
-			// TODO handle seq.RollOverAccount and packet loss detection
-			SequenceNumber: p.seq.NextSequenceNumber(),
-			SSRC:           p.SSRC,
-			CSRC:           []uint32{},
-		},
-		Payload: b,
-	}
-	p.LastPacket = pkt
-	p.nextTimestamp += p.ClockRate
-
-	if p.OnRTP != nil {
-		p.OnRTP(&pkt)
-	}
-
-	err := p.Sess.WriteRTP(&pkt)
-	return len(pkt.Payload), err
-	// TODO write RTCP
+	return p.WriteSamples(b, p.ClockRate, p.nextTimestamp == 0, p.PayloadType)
 }
 
 func (p *RTPWriter) WriteSamples(b []byte, timestampRateIncrease uint32, marker bool, payloadType uint8) (int, error) {
 	pkt := rtp.Packet{
 		Header: rtp.Header{
-			Version:        2,
-			Padding:        false,
-			Extension:      false,
-			Marker:         marker,
-			PayloadType:    payloadType,
-			Timestamp:      p.nextTimestamp,
+			Version:     2,
+			Padding:     false,
+			Extension:   false,
+			Marker:      marker,
+			PayloadType: payloadType,
+			// Timestamp should increase linear and monotonic for media clock
+			// Payload must be in same clock rate
+			// TODO: what about wrapp arround
+			Timestamp: p.nextTimestamp,
+			// TODO handle seq.RollOverAccount and packet loss detection
 			SequenceNumber: p.seq.NextSequenceNumber(),
 			SSRC:           p.SSRC,
 			CSRC:           []uint32{},
@@ -120,5 +100,4 @@ func (p *RTPWriter) WriteSamples(b []byte, timestampRateIncrease uint32, marker 
 
 	err := p.Sess.WriteRTP(&pkt)
 	return len(pkt.Payload), err
-	// TODO write RTCP
 }
