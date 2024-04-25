@@ -25,11 +25,14 @@ type RTPReader struct {
 // TODO should it also decode ?
 func NewRTPReader(sess *MediaSession) *RTPReader {
 	fmts, _ := sess.Formats.ToNumeric()
+	payloadType := uint8(fmts[0])
+	// only ulaw,alaw support
 
 	w := RTPReader{
 		Sess:          sess,
 		unreadPayload: []byte{},
-		PayloadType:   uint8(fmts[0]),
+		PayloadType:   payloadType,
+		OnRTP:         func(pkt *rtp.Packet) {},
 
 		pktBuffer: make(chan []byte, 100),
 	}
@@ -54,17 +57,14 @@ func (r *RTPReader) Read(b []byte) (int, error) {
 		return 0, fmt.Errorf("payload type does not match. expected=%d, actual=%d", r.PayloadType, pkt.PayloadType)
 	}
 
-	// First packet
-	if r.LastPacket.SSRC != 0 {
-		expectedSeq := r.LastPacket.SequenceNumber + 1
-		if pkt.SequenceNumber != expectedSeq {
-			log.Warn().Msg("Out of order pkt received")
-		}
-	}
-
+	firstPacket := r.LastPacket.SSRC == 0
+	expectedSeq := r.LastPacket.SequenceNumber + 1
 	r.LastPacket = pkt
-	if r.OnRTP != nil {
-		r.OnRTP(&pkt)
+	r.OnRTP(&pkt)
+
+	// Check sequence
+	if !firstPacket && pkt.SequenceNumber != expectedSeq {
+		log.Warn().Msg("Out of order pkt received")
 	}
 
 	return r.readPayload(b, pkt.Payload), nil
