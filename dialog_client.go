@@ -2,9 +2,11 @@ package sipgox
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/emiago/sipgo"
+	"github.com/emiago/sipgo/sip"
 	"github.com/pion/rtp"
 	"github.com/rs/zerolog/log"
 )
@@ -13,6 +15,8 @@ type DialogClientSession struct {
 	*MediaSession
 
 	*sipgo.DialogClientSession
+
+	subscriptions sync.Map
 
 	// onClose used to cleanup internal logic
 	onClose func()
@@ -87,11 +91,48 @@ func (d *DialogClientSession) Echo() {
 	}
 }
 
-// Deprecated. Use MediaStream
-func (d *DialogClientSession) DumpMedia() {
-	mlog := MediaStreamLogger(log.Logger)
-	d.MediaStream(mlog)
+// Refer tries todo refer (blind transfer) on call
+func (d *DialogClientSession) Refer(ctx context.Context, referTo sip.Uri) error {
+	// TODO check state of call
+
+	req := sip.NewRequest(sip.REFER, d.InviteRequest.Recipient)
+	UACRequestBuild(req, d.InviteRequest, d.InviteResponse)
+
+	req.AppendHeader(sip.NewHeader("Refer-to", referTo.String()))
+
+	tx, err := d.TransactionRequest(ctx, req)
+	if err != nil {
+		return err
+	}
+
+	select {
+	case <-tx.Done():
+		return tx.Err()
+	case res := <-tx.Responses():
+		if res.StatusCode != sip.StatusAccepted {
+			return sipgo.ErrDialogResponse{
+				Res: res,
+			}
+		}
+
+	case <-ctx.Done():
+		return tx.Cancel()
+	}
+
+	// There is now implicit subscription
+	return nil
 }
+
+// func (d *DialogClientSession) readNotify(req *sip.Request, tx sip.ServerTransaction) error {
+// 	sub := d.subscriptions.Load(req.CallID().Value())
+
+// 	select {
+// 	case <-d.Context().Done():
+// 		return d.Context().Err()
+// 	case d.notifyChan <- req:
+// 	}
+// 	return nil
+// }
 
 func (d *DialogClientSession) MediaStream(s MediaStreamer) error {
 	return s.MediaStream(d.MediaSession)
