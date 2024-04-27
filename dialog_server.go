@@ -2,6 +2,7 @@ package sipgox
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -44,9 +45,16 @@ func (d *DialogServerSession) Bye(ctx context.Context) error {
 	return d.DialogServerSession.Bye(ctx)
 }
 
+// BlindTransfer is alias to refer
+func (d *DialogServerSession) BlindTransfer(ctx context.Context, referTo sip.Uri) error {
+	return d.Refer(ctx, referTo)
+}
+
 // Refer tries todo refer (blind transfer) on call
+// Should return subscription for implicit NOTIFY
 func (d *DialogServerSession) Refer(ctx context.Context, referTo sip.Uri) error {
 	// TODO check state of call
+	// This must be moved to sipgo for checking state of call
 
 	req := sip.NewRequest(sip.REFER, d.InviteRequest.Contact().Address)
 	UASRequestBuild(req, d.InviteResponse)
@@ -75,18 +83,21 @@ func (d *DialogServerSession) Refer(ctx context.Context, referTo sip.Uri) error 
 		return tx.Cancel()
 	}
 
-	return d.Hangup(ctx)
-
 	// There is now implicit subscription
+	// We can disable it by
+	// https://datatracker.ietf.org/doc/html/rfc4488
+	// We only wait as we want to return error if transfer failed
 	select {
 	case e := <-d.waitNotify:
-		return e
+		// Always hangup
+		return errors.Join(e, d.Hangup(ctx))
 	case <-d.Context().Done():
 		return d.Context().Err()
 	}
 }
 
-func (d *DialogServerSession) Notify(req *sip.Request) error {
+// should not be used yet
+func (d *DialogServerSession) notify(req *sip.Request) error {
 	if req.CallID().Value() != d.InviteResponse.CallID().Value() {
 		return sipgo.ErrDialogDoesNotExists
 	}
@@ -95,19 +106,19 @@ func (d *DialogServerSession) Notify(req *sip.Request) error {
 		return fmt.Errorf("no body in notify")
 	}
 
-	if strings.HasPrefix("SIP/2.0 1", string(req.Body())) {
-		return nil
-	}
+	payload := string(req.Body())
 
 	var e error = nil
-	if !strings.HasPrefix("SIP/2.0 200", string(req.Body())) {
-		e = fmt.Errorf("not 200 response")
+	switch {
+	case strings.HasPrefix(payload, "SIP/2.0 1"):
+	case strings.HasPrefix(payload, "SIP/2.0 200"):
+	default:
+		e = fmt.Errorf("bad NOTIFY response with body=%q", payload)
 	}
-
 	select {
 	case d.waitNotify <- e:
 	case <-d.Context().Done():
-		return d.Context().Err()
+		return sipgo.ErrDialogDoesNotExists
 	}
 	return nil
 }

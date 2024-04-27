@@ -1058,6 +1058,29 @@ func (p *Phone) answer(ansCtx context.Context, opts AnswerOptions) (*DialogServe
 		// }
 	})
 
+	server.OnNotify(func(req *sip.Request, tx sip.ServerTransaction) {
+		// TODO handle REFER
+		if d == nil {
+			res := sip.NewResponseFromRequest(req, sip.StatusMethodNotAllowed, "", nil)
+			tx.Respond(res)
+			return
+		}
+
+		select {
+		case <-d.Context().Done():
+			res := sip.NewResponseFromRequest(req, sip.StatusMethodNotAllowed, "Not Allowed", nil)
+			tx.Respond(res)
+		default:
+		}
+
+		res := sip.NewResponseFromRequest(req, sip.StatusOK, "OK", nil)
+		tx.Respond(res)
+		if err := d.notify(req); err != nil {
+			log.Error().Err(err).Msg("Notify processed with error")
+			return
+		}
+	})
+
 	server.OnOptions(func(req *sip.Request, tx sip.ServerTransaction) {
 		res := sip.NewResponseFromRequest(req, 200, "OK", nil)
 		tx.Respond(res)
