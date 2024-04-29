@@ -6,14 +6,11 @@ toolchain go1.21.5
 
 require (
 	github.com/emiago/sipgo v0.20.0
-	github.com/faiface/beep v1.1.0
 	github.com/icholy/digest v0.1.22
 	github.com/pion/rtcp v1.2.10
 	github.com/pion/rtp v1.8.2
-	github.com/pion/sdp v1.3.0
 	github.com/rs/zerolog v1.31.0
 	github.com/stretchr/testify v1.8.4
-	github.com/zaf/g711 v1.4.0
 )
 
 require (
@@ -32,7 +29,6 @@ require (
 	github.com/mattn/go-colorable v0.1.13 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/pion/randutil v0.1.0 // indirect
-	github.com/pkg/errors v0.9.1 // indirect
 	github.com/satori/go.uuid v1.2.1-0.20181028125025-b2ce2384e17b // indirect
 	golang.org/x/sys v0.16.0 // indirect
 	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c // indirect
