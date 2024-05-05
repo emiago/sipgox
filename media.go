@@ -26,8 +26,12 @@ var (
 	RTCPDebug = false
 )
 
+// MediaSession represents active media session with RTP/RTCP
 type MediaSession struct {
+	// Raddr is our target remote address. Normally it is resolved by SDP parsing.
+	// Checkout SetRemoteAddr
 	Raddr *net.UDPAddr
+	// Laddr our local address which has full IP and port after media session creation
 	Laddr *net.UDPAddr
 
 	rtpConn   net.PacketConn
@@ -38,7 +42,6 @@ type MediaSession struct {
 	rtcpConnectedConn net.Conn
 
 	// Depending of negotiation this can change
-	// Not thread safe
 	Formats sdp.Formats
 
 	log zerolog.Logger
@@ -65,7 +68,9 @@ func (s *MediaSession) SetLogger(log zerolog.Logger) {
 	s.log = log
 }
 
-func (s *MediaSession) setRemoteAddr(raddr *net.UDPAddr) {
+// SetRemoteAddr is helper to set Raddr and rtcp address.
+// It is not thread safe
+func (s *MediaSession) SetRemoteAddr(raddr *net.UDPAddr) {
 	s.Raddr = raddr
 	s.rtcpRaddr = new(net.UDPAddr)
 	*s.rtcpRaddr = *s.Raddr
@@ -97,7 +102,7 @@ func (s *MediaSession) RemoteSDP(sdpReceived []byte) error {
 	}
 
 	raddr := &net.UDPAddr{IP: ci.IP, Port: md.Port}
-	s.setRemoteAddr(raddr)
+	s.SetRemoteAddr(raddr)
 
 	s.updateFormats(md.Formats)
 	return nil
@@ -173,6 +178,65 @@ func (s *MediaSession) dial() error {
 
 // Listen creates listeners instead
 func (s *MediaSession) createListeners(laddr *net.UDPAddr) error {
+	// var err error
+
+	if laddr.Port != 0 {
+		return s.listenRTPandRTCP(laddr)
+	}
+
+	if laddr.Port == 0 && RTPPortStart > 0 && RTPPortEnd > RTPPortStart {
+		// Get next available port
+		port := RTPPortStart + int(rtpPortOffset.Load())
+		var err error
+		for ; port < RTPPortEnd; port += 2 {
+			laddr.Port = port
+			err = s.listenRTPandRTCP(laddr)
+			if err == nil {
+				break
+			}
+		}
+		if err != nil {
+			return fmt.Errorf("No available ports in range %d:%d: %w", RTPPortStart, RTPPortEnd, err)
+		}
+		// Add some offset so that we use more from range
+		offset := (port + 2 - RTPPortStart) % (RTPPortEnd - RTPPortStart)
+		rtpPortOffset.Store(int32(offset)) // Reset to zero with module
+	}
+
+	// Because we want to go +2 with ports in racy situations this will always fail
+	// So we need to add some control and retry if needed
+	// We are always in race with other services so only try to offset to reduce retries
+	var err error
+	for retries := 0; retries < 10; retries += 1 {
+		err = s.listenRTPandRTCP(laddr)
+		if err == nil {
+			break
+		}
+	}
+
+	return err
+}
+
+func (s *MediaSession) listenRTPandRTCP(laddr *net.UDPAddr) error {
+	var err error
+	s.rtpConn, err = net.ListenUDP("udp", &net.UDPAddr{IP: laddr.IP, Port: laddr.Port})
+	if err != nil {
+		return err
+	}
+	laddr = s.rtpConn.LocalAddr().(*net.UDPAddr)
+
+	s.rtcpConn, err = net.ListenUDP("udp", &net.UDPAddr{IP: laddr.IP, Port: laddr.Port + 1})
+	if err != nil {
+		s.rtpConn.Close()
+		return err
+	}
+
+	// Update laddr as it can be empheral
+	s.Laddr = laddr
+	return nil
+}
+
+func (s *MediaSession) createListeners2(laddr *net.UDPAddr) error {
 	var err error
 
 	if laddr.Port == 0 && RTPPortStart > 0 && RTPPortEnd > RTPPortStart {
@@ -201,6 +265,7 @@ func (s *MediaSession) createListeners(laddr *net.UDPAddr) error {
 		rtpPortOffset.Store(int32(offset)) // Reset to zero with module
 	}
 
+	// Without RTP port ranges this can fail on RTCP to be reused in racy conditions
 	s.rtpConn, err = net.ListenUDP("udp", &net.UDPAddr{IP: laddr.IP, Port: laddr.Port})
 	if err != nil {
 		return err
