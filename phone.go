@@ -399,6 +399,11 @@ type DialOptions struct {
 	// OnResponse is just callback called after INVITE is sent and all responses before final one
 	// Useful for tracking call state
 	OnResponse func(inviteResp *sip.Response)
+
+	// OnRefer is called 2 times.
+	// 1st with state NONE and dialog=nil. This is to have caller prepared
+	// 2nd with state Established or Ended with dialog
+	OnRefer func(state sip.DialogState, dialog *DialogClientSession)
 }
 
 // Dial creates dialog with recipient
@@ -452,18 +457,120 @@ func (p *Phone) Dial(dialCtx context.Context, recipient sip.Uri, o DialOptions) 
 		return nil, err
 	}
 
+	// Setup dialog client
 	dc := sipgo.NewDialogClient(client, contactHDR)
-	// Setup srv for bye
+
 	server.OnBye(func(req *sip.Request, tx sip.ServerTransaction) {
 		if err := dc.ReadBye(req, tx); err != nil {
-			log.Error().Err(err).Msg("dialog reading bye went with error")
+			if errors.Is(err, sipgo.ErrDialogDoesNotExists) {
+				log.Info().Msg("Received BYE but dialog was already closed")
+				return
+			}
+
+			log.Error().Err(err).Msg("Dialog reading BYE failed")
 			return
 		}
 		log.Debug().Msg("Received BYE")
 	})
 
-	// TODO setup session before
-	// rtpIp := p.ua.GetIP()
+	server.OnRefer(func(req *sip.Request, tx sip.ServerTransaction) {
+		if o.OnRefer == nil {
+			log.Warn().Str("req", req.StartLine()).Msg("Refer is not handled. Missing OnRefer")
+			tx.Respond(sip.NewResponseFromRequest(req, sip.StatusMethodNotAllowed, "Method not allowed", nil))
+			return
+		}
+
+		var dialog *sipgo.DialogClientSession
+		var newDialog *DialogClientSession
+		var err error
+		// TODO refactor this
+		refer := func() error {
+			referUri := sip.Uri{}
+			dialog, err = dc.ReadRefer(req, tx, &referUri)
+			if err != nil {
+				return err
+			}
+
+			// Setup session
+			rtpIp := p.UA.GetIP()
+			if lip := net.ParseIP(host); lip != nil && !lip.IsUnspecified() {
+				rtpIp = lip
+			}
+			msess, err := NewMediaSession(&net.UDPAddr{IP: rtpIp, Port: 0})
+			if err != nil {
+				return err
+			}
+
+			notifyAccepted := true
+			{
+				// Do Notify
+				log.Info().Msg("Sending NOTIFY")
+				notify := sip.NewRequest(sip.NOTIFY, req.Contact().Address)
+				notify.AppendHeader(sip.NewHeader("Content-Type", "message/sipfrag;version=2.0"))
+				notify.SetBody([]byte("SIP/2.0 100 Trying"))
+				cliTx, err := dialog.TransactionRequest(dialog.Context(), notify)
+				if err != nil {
+					return err
+				}
+				defer cliTx.Terminate()
+
+				select {
+				case <-cliTx.Done():
+				case res := <-cliTx.Responses():
+					notifyAccepted = res.StatusCode == sip.StatusOK
+				}
+			}
+
+			invite := sip.NewRequest(sip.INVITE, referUri)
+			invite.SetTransport(network)
+			invite.AppendHeader(sip.NewHeader("Content-Type", "application/sdp"))
+			invite.SetBody(msess.LocalSDP())
+
+			newDialog, err = p.dial(context.TODO(), dc, invite, msess, o)
+			if err != nil {
+				log.Error().Err(err).Msg("Fail to dial REFER")
+				return err
+			}
+
+			if notifyAccepted {
+				notify := sip.NewRequest(sip.NOTIFY, req.Contact().Address)
+				notify.AppendHeader(sip.NewHeader("Content-Type", "message/sipfrag;version=2.0"))
+				notify.SetBody([]byte("SIP/2.0 200 OK"))
+				cliTx, err := dialog.TransactionRequest(dialog.Context(), notify)
+				if err != nil {
+					return err
+				}
+				defer cliTx.Terminate()
+			}
+			return nil
+		}
+
+		// Refer can happen and due to new dialog creation current one could be terminated.
+		// Caller would not be able to get control of new dialog until it is answered
+		// This way we say to caller to wait transfer completition, and current dialog can be terminated
+		o.OnRefer(0, nil)
+		if err := refer(); err != nil {
+			log.Error().Err(err).Msg("Fail to dial REFER")
+			// Handle better this errors
+			tx.Respond(sip.NewResponseFromRequest(req, sip.StatusInternalServerError, err.Error(), nil))
+			o.OnRefer(sip.DialogStateEnded, nil)
+			return
+		}
+
+		// Let caller decide will it close current dialog or continue with transfer
+		// defer dialog.Close()
+		// defer dialog.Bye(context.TODO())
+
+		o.OnRefer(sip.DialogStateConfirmed, newDialog)
+	})
+
+	// Start server
+	// for _, l := range listeners {
+	// 	log.Info().Str("network", l.Network).Str("addr", l.Addr).Msg("Listening on")
+	// 	go l.Listen()
+	// }
+
+	// Setup session
 	rtpIp := p.UA.GetIP()
 	if lip := net.ParseIP(host); lip != nil && !lip.IsUnspecified() {
 		rtpIp = lip
@@ -491,93 +598,82 @@ func (p *Phone) Dial(dialCtx context.Context, recipient sip.Uri, o DialOptions) 
 		req.AppendHeader(h)
 	}
 
-	// Start server
-	// for _, l := range listeners {
-	// 	log.Info().Str("network", l.Network).Str("addr", l.Addr).Msg("Listening on")
-	// 	go l.Listen()
-	// }
-
-	stopDial := sync.OnceFunc(func() {
-		// for _, l := range listeners {
-		// 	log.Debug().Str("addr", l.Addr).Msg("Closing listener")
-		// 	l.Close()
-		// }
-	})
-
-	// TODO move this out
-	dial := func(ctx context.Context) (*DialogClientSession, error) {
-		waitStart := time.Now()
-		dialog, err := dc.WriteInvite(ctx, req)
-		if err != nil {
-			return nil, err
-		}
-		logRequest(&log, req)
-
-		// Wait 200
-		err = dialog.WaitAnswer(ctx, sipgo.AnswerOptions{
-			OnResponse: func(res *sip.Response) {
-				logResponse(&log, res)
-				if o.OnResponse != nil {
-					o.OnResponse(res)
-				}
-			},
-			Username: o.Username,
-			Password: o.Password,
-		})
-
-		var rerr *sipgo.ErrDialogResponse
-		if errors.As(err, &rerr) {
-			return nil, &DialResponseError{
-				InviteReq:  req,
-				InviteResp: rerr.Res,
-				Msg:        fmt.Sprintf("Call not answered: %s", rerr.Res.StartLine()),
-			}
-		}
-
-		if err != nil {
-			return nil, err
-		}
-
-		r := dialog.InviteResponse
-		log.Info().
-			Int("code", int(r.StatusCode)).
-			// Str("reason", r.Reason).
-			Str("duration", time.Since(waitStart).String()).
-			Msg("Call answered")
-
-		// Setup media
-		err = msess.RemoteSDP(r.Body())
-		// TODO handle bad SDP
-		if err != nil {
-			return nil, err
-		}
-
-		log.Info().
-			Str("formats", logFormats(msess.Formats)).
-			Str("localAddr", msess.Laddr.String()).
-			Str("remoteAddr", msess.Raddr.String()).
-			Msg("Media/RTP session created")
-
-		// Send ACK
-		if err := dialog.Ack(ctx); err != nil {
-			return nil, fmt.Errorf("fail to send ACK: %w", err)
-		}
-
-		return &DialogClientSession{
-			MediaSession:        msess,
-			DialogClientSession: dialog,
-		}, nil
-	}
-
-	dialog, err := dial(ctx)
+	dialog, err := p.dial(ctx, dc, req, msess, o)
 	if err != nil {
-		stopDial()
 		return nil, err
 	}
 
-	// Attach on close
-	dialog.onClose = stopDial
 	return dialog, nil
+}
+
+func (p *Phone) dial(ctx context.Context, dc *sipgo.DialogClient, invite *sip.Request, msess *MediaSession, o DialOptions) (*DialogClientSession, error) {
+	log := p.getLoggerCtx(ctx, "Dial")
+	dialog, err := dc.WriteInvite(ctx, invite)
+	if err != nil {
+		return nil, err
+	}
+	logRequest(&log, invite)
+	return p.dialWaitAnswer(ctx, dialog, msess, o)
+}
+
+func (p *Phone) dialWaitAnswer(ctx context.Context, dialog *sipgo.DialogClientSession, msess *MediaSession, o DialOptions) (*DialogClientSession, error) {
+	log := p.getLoggerCtx(ctx, "Dial")
+	invite := dialog.InviteRequest
+	// Wait 200
+	waitStart := time.Now()
+	err := dialog.WaitAnswer(ctx, sipgo.AnswerOptions{
+		OnResponse: func(res *sip.Response) {
+			logResponse(&log, res)
+			if o.OnResponse != nil {
+				o.OnResponse(res)
+			}
+		},
+		Username: o.Username,
+		Password: o.Password,
+	})
+
+	var rerr *sipgo.ErrDialogResponse
+	if errors.As(err, &rerr) {
+		return nil, &DialResponseError{
+			InviteReq:  invite,
+			InviteResp: rerr.Res,
+			Msg:        fmt.Sprintf("Call not answered: %s", rerr.Res.StartLine()),
+		}
+	}
+
+	if err != nil {
+		return nil, err
+	}
+
+	r := dialog.InviteResponse
+	log.Info().
+		Int("code", int(r.StatusCode)).
+		// Str("reason", r.Reason).
+		Str("duration", time.Since(waitStart).String()).
+		Msg("Call answered")
+
+	// Setup media
+	err = msess.RemoteSDP(r.Body())
+	// TODO handle bad SDP
+	if err != nil {
+		return nil, err
+	}
+
+	log.Info().
+		Str("formats", logFormats(msess.Formats)).
+		Str("localAddr", msess.Laddr.String()).
+		Str("remoteAddr", msess.Raddr.String()).
+		Msg("Media/RTP session created")
+
+	// Send ACK
+	if err := dialog.Ack(ctx); err != nil {
+		return nil, fmt.Errorf("fail to send ACK: %w", err)
+	}
+
+	return &DialogClientSession{
+		MediaSession:        msess,
+		DialogClientSession: dialog,
+	}, nil
 }
 
 var (
