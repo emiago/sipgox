@@ -1,7 +1,10 @@
 package sipgox
 
 import (
+	"errors"
 	"fmt"
+	"io"
+	"net"
 
 	"github.com/pion/rtp"
 	"github.com/rs/zerolog/log"
@@ -50,6 +53,10 @@ func (r *RTPReader) Read(b []byte) (int, error) {
 
 	pkt, err := r.Sess.ReadRTP()
 	if err != nil {
+		if errors.Is(err, net.ErrClosed) {
+			return 0, io.EOF
+		}
+
 		return 0, err
 	}
 
