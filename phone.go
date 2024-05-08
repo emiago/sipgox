@@ -403,7 +403,14 @@ type DialOptions struct {
 	// OnRefer is called 2 times.
 	// 1st with state NONE and dialog=nil. This is to have caller prepared
 	// 2nd with state Established or Ended with dialog
-	OnRefer func(state sip.DialogState, dialog *DialogClientSession)
+	OnRefer func(state DialogReferState)
+}
+
+type DialogReferState struct {
+	// Updates current transfer progress with state
+	State sip.DialogState
+	// Dialog present when state is answered (Confirmed dialog state)
+	Dialog *DialogClientSession
 }
 
 // Dial creates dialog with recipient
@@ -528,7 +535,6 @@ func (p *Phone) Dial(dialCtx context.Context, recipient sip.Uri, o DialOptions) 
 
 			newDialog, err = p.dial(context.TODO(), dc, invite, msess, o)
 			if err != nil {
-				log.Error().Err(err).Msg("Fail to dial REFER")
 				return err
 			}
 
@@ -548,12 +554,12 @@ func (p *Phone) Dial(dialCtx context.Context, recipient sip.Uri, o DialOptions) 
 		// Refer can happen and due to new dialog creation current one could be terminated.
 		// Caller would not be able to get control of new dialog until it is answered
 		// This way we say to caller to wait transfer completition, and current dialog can be terminated
-		o.OnRefer(0, nil)
+		o.OnRefer(DialogReferState{State: 0})
 		if err := refer(); err != nil {
 			log.Error().Err(err).Msg("Fail to dial REFER")
 			// Handle better this errors
 			tx.Respond(sip.NewResponseFromRequest(req, sip.StatusInternalServerError, err.Error(), nil))
-			o.OnRefer(sip.DialogStateEnded, nil)
+			o.OnRefer(DialogReferState{State: sip.DialogStateEnded})
 			return
 		}
 
@@ -561,7 +567,7 @@ func (p *Phone) Dial(dialCtx context.Context, recipient sip.Uri, o DialOptions) 
 		// defer dialog.Close()
 		// defer dialog.Bye(context.TODO())
 
-		o.OnRefer(sip.DialogStateConfirmed, newDialog)
+		o.OnRefer(DialogReferState{State: sip.DialogStateConfirmed, Dialog: newDialog})
 	})
 
 	// Start server
