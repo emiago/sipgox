@@ -618,7 +618,7 @@ func (p *Phone) dial(ctx context.Context, dc *sipgo.DialogClient, invite *sip.Re
 	if err != nil {
 		return nil, err
 	}
-	logRequest(&log, invite)
+	p.logSipRequest(&log, invite)
 	return p.dialWaitAnswer(ctx, dialog, msess, o)
 }
 
@@ -629,7 +629,7 @@ func (p *Phone) dialWaitAnswer(ctx context.Context, dialog *sipgo.DialogClientSe
 	waitStart := time.Now()
 	err := dialog.WaitAnswer(ctx, sipgo.AnswerOptions{
 		OnResponse: func(res *sip.Response) {
-			logResponse(&log, res)
+			p.logSipResponse(&log, res)
 			if o.OnResponse != nil {
 				o.OnResponse(res)
 			}
@@ -922,7 +922,7 @@ func (p *Phone) answer(ansCtx context.Context, opts AnswerOptions) (*DialogServe
 			}
 			log.Info().Str("username", cred.Username).Str("source", req.Source()).Msg("INVITE authorized")
 		}
-		logRequest(&log, req)
+		p.logSipRequest(&log, req)
 
 		dialog, err := ds.ReadInvite(req, tx)
 		if err != nil {
@@ -972,7 +972,7 @@ func (p *Phone) answer(ansCtx context.Context, opts AnswerOptions) (*DialogServe
 					d = nil
 					return fmt.Errorf("failed to respond custom status code %d: %w", int(opts.AnswerCode), err)
 				}
-				logResponse(&log, dialog.InviteResponse)
+				p.logSipResponse(&log, dialog.InviteResponse)
 
 				d = &DialogServerSession{
 					DialogServerSession: dialog,
@@ -1006,7 +1006,7 @@ func (p *Phone) answer(ansCtx context.Context, opts AnswerOptions) (*DialogServe
 				if err := dialog.WriteResponse(res); err != nil {
 					return fmt.Errorf("failed to send 180 response: %w", err)
 				}
-				logResponse(&log, res)
+				p.logSipResponse(&log, res)
 
 				select {
 				case <-tx.Cancels():
@@ -1025,7 +1025,7 @@ func (p *Phone) answer(ansCtx context.Context, opts AnswerOptions) (*DialogServe
 					return fmt.Errorf("failed to send 100 response: %w", err)
 				}
 
-				logResponse(&log, res)
+				p.logSipResponse(&log, res)
 			}
 
 			contentType := req.ContentType()
@@ -1082,19 +1082,7 @@ func (p *Phone) answer(ansCtx context.Context, opts AnswerOptions) (*DialogServe
 				d = nil
 				return fmt.Errorf("fail to send 200 response: %w", err)
 			}
-			logResponse(&log, res)
-
-			// FOR ASTERISK YOU NEED TO REPLY WITH SAME RECIPIENT
-			// IN CASE PROXY AND IN DIALOG handling this must be contact address -.-
-			// if req.GetHeader("Record-Route") == nil {
-			// 	f, _ := req.From()
-			// 	d.contact = &f.Address
-			// 	d.destination = req.Source()
-			// }
-
-			// applyCodecs(msess, sd)
-
-			// defer close(d.done)
+			p.logSipResponse(&log, res)
 
 			select {
 			case <-tx.Done():
@@ -1212,6 +1200,24 @@ func (p *Phone) AnswerWithCode(ansCtx context.Context, code sip.StatusCode, reas
 	return dialog, nil
 }
 
+// TODO allow this to be reformated outside
+func (p *Phone) logSipRequest(log *zerolog.Logger, req *sip.Request) {
+	log.Info().
+		Str("request", req.StartLine()).
+		Str("call_id", req.CallID().Value()).
+		Str("from", req.From().Value()).
+		Str("event", "SIP").
+		Msg("Request")
+}
+
+func (p *Phone) logSipResponse(log *zerolog.Logger, res *sip.Response) {
+	log.Info().
+		Str("response", res.StartLine()).
+		Str("call_id", res.CallID().Value()).
+		Str("event", "SIP").
+		Msg("Response")
+}
+
 func getResponse(ctx context.Context, tx sip.ClientTransaction) (*sip.Response, error) {
 	select {
 	case <-tx.Done():
@@ -1237,17 +1243,4 @@ func logFormats(f sdp.Formats) string {
 		}
 	}
 	return strings.Join(out, ",")
-}
-
-// TODO allow this to be reformated outside
-func logRequest(log *zerolog.Logger, req *sip.Request) {
-	log.Info().
-		Str("callID", req.CallID().Value()).
-		Str("request", req.StartLine()).
-		Str("from", req.From().Value()).
-		Msg("Request")
-}
-
-func logResponse(log *zerolog.Logger, res *sip.Response) {
-	log.Info().Str("response", res.StartLine()).Msg("Response")
 }
