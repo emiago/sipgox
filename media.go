@@ -201,6 +201,7 @@ func (s *MediaSession) createListeners(laddr *net.UDPAddr) error {
 		// Add some offset so that we use more from range
 		offset := (port + 2 - RTPPortStart) % (RTPPortEnd - RTPPortStart)
 		rtpPortOffset.Store(int32(offset)) // Reset to zero with module
+		return nil
 	}
 
 	// Because we want to go +2 with ports in racy situations this will always fail
