@@ -7,7 +7,6 @@ import (
 	"net"
 
 	"github.com/pion/rtp"
-	"github.com/rs/zerolog/log"
 )
 
 // RTP Writer packetize any payload before pushing to active media session
@@ -51,8 +50,8 @@ func (r *RTPReader) Read(b []byte) (int, error) {
 		return n, nil
 	}
 
-	pkt, err := r.Sess.ReadRTP()
-	if err != nil {
+	pkt := rtp.Packet{}
+	if err := r.Sess.readRTPNoAlloc(&pkt); err != nil {
 		if errors.Is(err, net.ErrClosed) {
 			return 0, io.EOF
 		}
@@ -71,7 +70,7 @@ func (r *RTPReader) Read(b []byte) (int, error) {
 
 	// Check sequence
 	if !firstPacket && pkt.SequenceNumber != expectedSeq {
-		log.Warn().Msg("Out of order pkt received")
+		r.Sess.log.Warn().Msg("Out of order pkt received")
 	}
 
 	return r.readPayload(b, pkt.Payload), nil

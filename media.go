@@ -38,9 +38,6 @@ type MediaSession struct {
 	rtcpConn  net.PacketConn
 	rtcpRaddr *net.UDPAddr
 
-	rtpConnectedConn  net.Conn
-	rtcpConnectedConn net.Conn
-
 	// Depending of negotiation this can change
 	Formats sdp.Formats
 
@@ -133,47 +130,6 @@ func (s *MediaSession) updateFormats(formats sdp.Formats) {
 	} else {
 		s.Formats = formats
 	}
-}
-
-// Dial is setup connection for UDP, so it is more creating UPD listeners
-func (s *MediaSession) dial() error {
-	laddr, raddr := s.Laddr, s.Raddr
-	var err error
-
-	dialerRTP := net.Dialer{
-		LocalAddr: laddr,
-	}
-
-	dialerRTCP := net.Dialer{
-		// RTCP is always rtpPort + 1
-		LocalAddr: &net.UDPAddr{IP: laddr.IP, Port: laddr.Port + 1},
-	}
-	// RTP
-	// rtpladdr, _ := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", ip.String(), rtpPort))
-	s.rtpConnectedConn, err = dialerRTP.Dial("udp", raddr.String())
-	if err != nil {
-		return err
-	}
-
-	// s.rtpConn, err = net.ListenUDP("udp", rtpladdr)
-	// if err != nil {
-	// 	return nil, err
-	// }
-
-	// rtcpladdr, _ := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", ip.String(), rtpPort+1))
-	// s.rtcpConn, err = net.ListenUDP("udp", rtcpladdr)
-	dstAddr := net.JoinHostPort(raddr.IP.String(), strconv.Itoa(raddr.Port+1))
-	// Check here is rtcp mux
-	s.rtcpConnectedConn, err = dialerRTCP.Dial("udp", dstAddr)
-	if err != nil {
-		return err
-	}
-
-	// Update laddr as it can be empheral
-	laddr = s.rtpConnectedConn.LocalAddr().(*net.UDPAddr)
-	s.Laddr = laddr
-
-	return nil
 }
 
 // Listen creates listeners instead
@@ -291,14 +247,6 @@ func (s *MediaSession) Close() {
 	if s.rtpConn != nil {
 		s.rtpConn.Close()
 	}
-
-	if s.rtcpConnectedConn != nil {
-		s.rtcpConnectedConn.Close()
-	}
-
-	if s.rtcpConnectedConn != nil {
-		s.rtcpConnectedConn.Close()
-	}
 }
 
 func (s *MediaSession) UpdateDestinationSDP(sdpReceived []byte) error {
@@ -326,6 +274,33 @@ func (s *MediaSession) UpdateDestinationSDP(sdpReceived []byte) error {
 	return nil
 }
 
+// readRTPNoAlloc will replace ReadRTP
+// NOTE: this function will be replaced with passing packet as buf. This helps caller to reduce memory and GC
+func (m *MediaSession) readRTPNoAlloc(pkt *rtp.Packet) error {
+	buf := make([]byte, 1600)
+
+	n, err := m.ReadRTPRaw(buf)
+	if err != nil {
+		return err
+	}
+
+	if err := pkt.Unmarshal(buf[:n]); err != nil {
+		return err
+	}
+
+	if RTPDebug {
+		m.log.Debug().Msgf("Recv RTP\n%s", pkt.String())
+	}
+	return err
+}
+
+func (m *MediaSession) readRTPDeadlineNoAlloc(pkt *rtp.Packet, t time.Time) error {
+	m.rtpConn.SetReadDeadline(t)
+	return m.readRTPNoAlloc(pkt)
+}
+
+// Deprecated
+// Will be replaced with readRTPNoAlloc in next releases
 func (m *MediaSession) ReadRTP() (rtp.Packet, error) {
 	p := rtp.Packet{}
 
@@ -346,18 +321,21 @@ func (m *MediaSession) ReadRTP() (rtp.Packet, error) {
 	return p, err
 }
 
-func (m *MediaSession) ReadRTPWithDeadline(t time.Time) (rtp.Packet, error) {
+// Deprecated
+// Will be replaced with readRTPDeadlineNoAlloc in next releases
+func (m *MediaSession) ReadRTPDeadline(t time.Time) (rtp.Packet, error) {
 	m.rtpConn.SetReadDeadline(t)
 	return m.ReadRTP()
 }
 
 func (m *MediaSession) ReadRTPRaw(buf []byte) (int, error) {
-	if m.rtpConnectedConn != nil {
-		return m.rtpConnectedConn.Read(buf)
-	}
-
 	n, _, err := m.rtpConn.ReadFrom(buf)
 	return n, err
+}
+
+func (m *MediaSession) ReadRTPRawDeadline(buf []byte, t time.Time) (int, error) {
+	m.rtpConn.SetReadDeadline(t)
+	return m.ReadRTPRaw(buf)
 }
 
 func (m *MediaSession) ReadRTCP() ([]rtcp.Packet, error) {
@@ -371,11 +349,12 @@ func (m *MediaSession) ReadRTCP() ([]rtcp.Packet, error) {
 	return rtcp.Unmarshal(buf[:n])
 }
 
-func (m *MediaSession) ReadRTCPRaw(buf []byte) (int, error) {
-	if m.rtcpConnectedConn != nil {
-		return m.rtcpConnectedConn.Read(buf)
-	}
+func (m *MediaSession) ReadRTCPDeadline(t time.Time) ([]rtcp.Packet, error) {
+	m.rtcpConn.SetReadDeadline(t)
+	return m.ReadRTCP()
+}
 
+func (m *MediaSession) ReadRTCPRaw(buf []byte) (int, error) {
 	if m.rtcpConn == nil {
 		// just block
 		select {}
@@ -407,11 +386,7 @@ func (m *MediaSession) WriteRTP(p *rtp.Packet) error {
 }
 
 func (m *MediaSession) WriteRTPRaw(data []byte) (n int, err error) {
-	if m.rtpConnectedConn != nil {
-		n, err = m.rtpConnectedConn.Write(data)
-	} else {
-		n, err = m.rtpConn.WriteTo(data, m.Raddr)
-	}
+	n, err = m.rtpConn.WriteTo(data, m.Raddr)
 	return
 }
 
@@ -430,6 +405,11 @@ func (m *MediaSession) WriteRTCP(p rtcp.Packet) error {
 	return m.writeRTCP(data)
 }
 
+func (m *MediaSession) WriteRTCPDeadline(p rtcp.Packet, deadline time.Time) error {
+	m.rtcpConn.SetWriteDeadline(deadline)
+	return m.WriteRTCP(p)
+}
+
 // Use this to write Multi RTCP packets if they can fit in MTU=1500
 func (m *MediaSession) WriteRTCPs(pkts []rtcp.Packet) error {
 	data, err := rtcp.Marshal(pkts)
@@ -444,11 +424,7 @@ func (m *MediaSession) writeRTCP(data []byte) error {
 	var err error
 	var n int
 
-	if m.rtcpConnectedConn != nil {
-		n, err = m.rtcpConnectedConn.Write(data)
-	} else {
-		n, err = m.rtcpConn.WriteTo(data, m.rtcpRaddr)
-	}
+	n, err = m.rtcpConn.WriteTo(data, m.rtcpRaddr)
 	if err != nil {
 		return err
 	}
