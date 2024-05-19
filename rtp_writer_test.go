@@ -46,3 +46,13 @@ func TestRTPWriter(t *testing.T) {
 		require.Equal(t, len(payload), len(pkt.Payload))
 	}
 }
+
+func TestBinary(t *testing.T) {
+	var v uint16 = 5
+	seqN := 9
+
+	var res uint32 = uint32(v)<<16 + uint32(seqN)
+
+	t.Logf("%032b", res)
+
+}

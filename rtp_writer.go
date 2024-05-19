@@ -7,15 +7,17 @@ import (
 )
 
 // RTP Writer packetize any payload before pushing to active media session
+// It creates SSRC as identifier and all packets sent will be with this SSRC
+// For multiple streams, multiple RTP Writer needs to be created
 type RTPWriter struct {
 	Sess *MediaSession
 
 	seq rtp.Sequencer
 
 	// Some defaults, can be overriten only after creating writer
-	PayloadType uint8
-	SSRC        uint32
-	ClockRate   uint32
+	PayloadType        uint8
+	SSRC               uint32
+	ClockRateTimestamp uint32
 	// MTU         uint32
 
 	nextTimestamp uint32
@@ -39,11 +41,11 @@ func NewRTPWriter(sess *MediaSession) *RTPWriter {
 	var sampleRate uint32 = 8000
 
 	w := RTPWriter{
-		Sess:        sess,
-		seq:         rtp.NewRandomSequencer(),
-		PayloadType: payloadType,
-		ClockRate:   uint32(sampleRate * 20 / 1000), // 20ms 0.02 * 8000 = 160
-		SSRC:        rand.Uint32(),
+		Sess:               sess,
+		seq:                rtp.NewRandomSequencer(),
+		PayloadType:        payloadType,
+		ClockRateTimestamp: uint32(sampleRate * 20 / 1000), // 20ms 0.02 * 8000 = 160
+		SSRC:               rand.Uint32(),
 		// MTU:         1500,
 
 		// TODO: CSRC CSRC is contribution source identifiers.
@@ -68,10 +70,10 @@ func (p *RTPWriter) Write(b []byte) (int, error) {
 
 	// FRAGMENTATION WITHIN MTU
 	// multiple frame packets should preserve same timestamp
-	return p.WriteSamples(b, p.ClockRate, p.nextTimestamp == 0, p.PayloadType)
+	return p.WriteSamples(b, p.ClockRateTimestamp, p.nextTimestamp == 0, p.PayloadType)
 }
 
-func (p *RTPWriter) WriteSamples(b []byte, timestampRateIncrease uint32, marker bool, payloadType uint8) (int, error) {
+func (p *RTPWriter) WriteSamples(payload []byte, clockRateTimestamp uint32, marker bool, payloadType uint8) (int, error) {
 	pkt := rtp.Packet{
 		Header: rtp.Header{
 			Version:     2,
@@ -88,7 +90,7 @@ func (p *RTPWriter) WriteSamples(b []byte, timestampRateIncrease uint32, marker 
 			SSRC:           p.SSRC,
 			CSRC:           []uint32{},
 		},
-		Payload: b,
+		Payload: payload,
 	}
 
 	if p.OnRTP != nil {
@@ -96,7 +98,7 @@ func (p *RTPWriter) WriteSamples(b []byte, timestampRateIncrease uint32, marker 
 	}
 
 	p.LastPacket = pkt
-	p.nextTimestamp += timestampRateIncrease
+	p.nextTimestamp += clockRateTimestamp
 
 	err := p.Sess.WriteRTP(&pkt)
 	return len(pkt.Payload), err
