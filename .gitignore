@@ -7,3 +7,7 @@
 /.vscode
 /g711
 /pbx
+/rtp_session*
+/rtp_playout_buffer*
+/MEDIA_QUALITY.md
+/asterisk-sounds-wav
