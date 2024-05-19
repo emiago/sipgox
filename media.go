@@ -38,8 +38,10 @@ type MediaSession struct {
 	rtcpConn  net.PacketConn
 	rtcpRaddr *net.UDPAddr
 
-	// Depending of negotiation this can change
+	// SDP stuff
+	// Depending of negotiation this can change.
 	Formats sdp.Formats
+	Mode    sdp.Mode
 
 	log zerolog.Logger
 }
@@ -50,6 +52,7 @@ func NewMediaSession(laddr *net.UDPAddr) (s *MediaSession, e error) {
 			sdp.FORMAT_TYPE_ULAW, sdp.FORMAT_TYPE_ALAW,
 		},
 		Laddr: laddr,
+		Mode:  sdp.ModeSendrecv,
 		log:   log.With().Str("caller", "media").Logger(),
 	}
 
@@ -78,7 +81,7 @@ func (s *MediaSession) LocalSDP() []byte {
 	ip := s.Laddr.IP
 	rtpPort := s.Laddr.Port
 
-	return SDPGenerateForAudio(ip, ip, rtpPort, SDPModeSendrecv, s.Formats)
+	return sdp.GenerateForAudio(ip, ip, rtpPort, s.Mode, s.Formats)
 }
 
 func (s *MediaSession) RemoteSDP(sdpReceived []byte) error {
@@ -346,7 +349,22 @@ func (m *MediaSession) ReadRTCP() ([]rtcp.Packet, error) {
 		return nil, err
 	}
 
-	return rtcp.Unmarshal(buf[:n])
+	pkts, err := rtcp.Unmarshal(buf[:n])
+	if err != nil {
+		return nil, err
+	}
+
+	if RTCPDebug {
+		for _, p := range pkts {
+			if s, ok := p.(fmt.Stringer); ok {
+				m.log.Debug().Msgf("RTCP read:\n%s", s.String())
+				continue
+			}
+			log.Debug().Interface("data", p).
+				Msg("RTCP read (Unknown):\n%s")
+		}
+	}
+	return pkts, nil
 }
 
 func (m *MediaSession) ReadRTCPDeadline(t time.Time) ([]rtcp.Packet, error) {

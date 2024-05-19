@@ -1,12 +1,10 @@
-package sipgox
+package sdp
 
 import (
 	"fmt"
 	"net"
 	"strings"
 	"time"
-
-	"github.com/emiago/sipgox/sdp"
 )
 
 func GetCurrentNTPTimestamp() uint64 {
@@ -16,16 +14,24 @@ func GetCurrentNTPTimestamp() uint64 {
 	return uint64(currentTime)
 }
 
-type SDPMode string
+func NTPTimestamp(now time.Time) uint64 {
+	ntpEpochOffset := 2208988800 // Offset from Unix epoch (January 1, 1970) to NTP epoch (January 1, 1900)
+	currentTime := now.Unix() + int64(ntpEpochOffset)
+
+	return uint64(currentTime)
+}
+
+type Mode string
 
 const (
 	// https://datatracker.ietf.org/doc/html/rfc4566#section-6
-	SDPModeRecvonly SDPMode = "recvonly"
-	SDPModeSendrecv SDPMode = "sendrecv"
-	SDPModeSendonly SDPMode = "sendonly"
+	ModeRecvonly Mode = "recvonly"
+	ModeSendrecv Mode = "sendrecv"
+	ModeSendonly Mode = "sendonly"
 )
 
-func SDPGenerateForAudio(originIP net.IP, connectionIP net.IP, rtpPort int, mode SDPMode, fmts sdp.Formats) []byte {
+// GenerateForAudio is minimal AUDIO SDP setup
+func GenerateForAudio(originIP net.IP, connectionIP net.IP, rtpPort int, mode Mode, fmts Formats) []byte {
 	ntpTime := GetCurrentNTPTimestamp()
 
 	formatsMap := []string{}
@@ -52,7 +58,7 @@ func SDPGenerateForAudio(originIP net.IP, connectionIP net.IP, rtpPort int, mode
 		// "a=ssrc:111222 cname:user@example.com",
 		// "a=rtpmap:0 PCMU/8000",
 		// "a=rtpmap:8 PCMA/8000",
-		// THIS is FOR DTM
+		// THIS is FOR DTMF
 		"a=rtpmap:101 telephone-event/8000",
 		"a=fmtp:101 0-16",
 		// "",
