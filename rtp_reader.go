@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 
+	"github.com/emiago/sipgox/sdp"
 	"github.com/pion/rtp"
 )
 
@@ -21,14 +22,23 @@ type RTPReader struct {
 	unread        int
 
 	pktBuffer chan []byte
+
+	// We want to track our last SSRC.
+	lastSSRC uint32
 }
 
 // RTP reader consumes samples of audio from session
 // TODO should it also decode ?
 func NewRTPReader(sess *MediaSession) *RTPReader {
-	fmts, _ := sess.Formats.ToNumeric()
-	payloadType := uint8(fmts[0])
-	// only ulaw,alaw support
+	f := sess.Formats[0]
+	var payloadType uint8 = sdp.FormatNumeric(f)
+	switch f {
+	case sdp.FORMAT_TYPE_ALAW:
+	case sdp.FORMAT_TYPE_ULAW:
+		// TODO more support
+	default:
+		sess.log.Warn().Str("format", f).Msg("Unsupported format. Using default clock rate")
+	}
 
 	w := RTPReader{
 		Sess:          sess,
@@ -63,15 +73,22 @@ func (r *RTPReader) Read(b []byte) (int, error) {
 		return 0, fmt.Errorf("payload type does not match. expected=%d, actual=%d", r.PayloadType, pkt.PayloadType)
 	}
 
-	firstPacket := r.LastPacket.SSRC == 0
-	expectedSeq := r.LastPacket.SequenceNumber + 1
+	// If we are tracking this source, do check are we keep getting pkts in sequence
+	if r.lastSSRC == pkt.SSRC {
+		expectedSeq := r.LastPacket.SequenceNumber + 1
+		if pkt.SequenceNumber == r.LastPacket.SequenceNumber {
+			r.Sess.log.Warn().Msg("Duplicate pkts received")
+			return 0, nil
+		}
+
+		if pkt.SequenceNumber != expectedSeq {
+			r.Sess.log.Warn().Msg("Out of order pkt received")
+		}
+	}
+
+	r.lastSSRC = pkt.SSRC
 	r.LastPacket = pkt
 	r.OnRTP(&pkt)
-
-	// Check sequence
-	if !firstPacket && pkt.SequenceNumber != expectedSeq {
-		r.Sess.log.Warn().Msg("Out of order pkt received")
-	}
 
 	return r.readPayload(b, pkt.Payload), nil
 }

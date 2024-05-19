@@ -2,7 +2,9 @@ package sipgox
 
 import (
 	"math/rand"
+	"time"
 
+	"github.com/emiago/sipgox/sdp"
 	"github.com/pion/rtp"
 )
 
@@ -18,6 +20,7 @@ type RTPWriter struct {
 	PayloadType        uint8
 	SSRC               uint32
 	ClockRateTimestamp uint32
+	ClockTicker        *time.Ticker
 	// MTU         uint32
 
 	nextTimestamp uint32
@@ -36,15 +39,23 @@ type RTPWriter struct {
 // - Silence detection and marker set
 // - Padding and encryyption
 func NewRTPWriter(sess *MediaSession) *RTPWriter {
-	fmts, _ := sess.Formats.ToNumeric()
-	payloadType := uint8(fmts[0])
+	f := sess.Formats[0]
+	var payloadType uint8 = sdp.FormatNumeric(f)
 	var sampleRate uint32 = 8000
+	switch f {
+	case sdp.FORMAT_TYPE_ALAW:
+	case sdp.FORMAT_TYPE_ULAW:
+		// TODO more support
+	default:
+		sess.log.Warn().Str("format", f).Msg("Unsupported format. Using default clock rate")
+	}
 
 	w := RTPWriter{
 		Sess:               sess,
 		seq:                rtp.NewRandomSequencer(),
 		PayloadType:        payloadType,
 		ClockRateTimestamp: uint32(sampleRate * 20 / 1000), // 20ms 0.02 * 8000 = 160
+		ClockTicker:        time.NewTicker(20 * time.Millisecond),
 		SSRC:               rand.Uint32(),
 		// MTU:         1500,
 
@@ -65,12 +76,9 @@ func NewRTPWriter(sess *MediaSession) *RTPWriter {
 // - Packet loss detection
 // - RTCP generating
 func (p *RTPWriter) Write(b []byte) (int, error) {
-	// b is our frame
-	// Spliting into multiple:
-
-	// FRAGMENTATION WITHIN MTU
-	// multiple frame packets should preserve same timestamp
-	return p.WriteSamples(b, p.ClockRateTimestamp, p.nextTimestamp == 0, p.PayloadType)
+	n, err := p.WriteSamples(b, p.ClockRateTimestamp, p.nextTimestamp == 0, p.PayloadType)
+	<-p.ClockTicker.C
+	return n, err
 }
 
 func (p *RTPWriter) WriteSamples(payload []byte, clockRateTimestamp uint32, marker bool, payloadType uint8) (int, error) {
