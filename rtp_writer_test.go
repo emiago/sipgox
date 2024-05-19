@@ -41,18 +41,9 @@ func TestRTPWriter(t *testing.T) {
 
 		require.Equal(t, rtpWriter.PayloadType, pkt.PayloadType)
 		require.Equal(t, rtpWriter.SSRC, pkt.SSRC)
+		require.Equal(t, rtpWriter.seq.ReadExtendedSeq(), uint64(pkt.SequenceNumber))
 		require.Equal(t, rtpWriter.nextTimestamp, pkt.Timestamp+160, "%d vs %d", rtpWriter.nextTimestamp, pkt.Timestamp)
 		require.Equal(t, i == 0, pkt.Marker)
 		require.Equal(t, len(payload), len(pkt.Payload))
 	}
-}
-
-func TestBinary(t *testing.T) {
-	var v uint16 = 5
-	seqN := 9
-
-	var res uint32 = uint32(v)<<16 + uint32(seqN)
-
-	t.Logf("%032b", res)
-
 }

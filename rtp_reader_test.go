@@ -54,5 +54,6 @@ func TestRTPReader(t *testing.T) {
 		require.Equal(t, writePkt.SSRC, pkt.SSRC)
 		require.Equal(t, i == 0, pkt.Marker)
 		require.Equal(t, n, len(pkt.Payload))
+		require.Equal(t, rtpReader.seq.ReadExtendedSeq(), uint64(writePkt.SequenceNumber))
 	}
 }

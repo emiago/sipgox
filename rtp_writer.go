@@ -14,7 +14,7 @@ import (
 type RTPWriter struct {
 	Sess *MediaSession
 
-	seq rtp.Sequencer
+	seq RTPExtendedSequenceNumber
 
 	// Some defaults, can be overriten only after creating writer
 	PayloadType        uint8
@@ -54,7 +54,7 @@ func NewRTPWriter(sess *MediaSession) *RTPWriter {
 
 	w := RTPWriter{
 		Sess:        sess,
-		seq:         rtp.NewRandomSequencer(),
+		seq:         NewRTPSequencer(),
 		PayloadType: payloadType,
 		SampleRate:  sampleRate,
 		SSRC:        rand.Uint32(),
@@ -103,9 +103,8 @@ func (p *RTPWriter) WriteSamples(payload []byte, clockRateTimestamp uint32, mark
 			// Timestamp should increase linear and monotonic for media clock
 			// Payload must be in same clock rate
 			// TODO: what about wrapp arround
-			Timestamp: p.nextTimestamp,
-			// TODO handle seq.RollOverAccount and packet loss detection
-			SequenceNumber: p.seq.NextSequenceNumber(),
+			Timestamp:      p.nextTimestamp,
+			SequenceNumber: p.seq.NextSeqNumber(),
 			SSRC:           p.SSRC,
 			CSRC:           []uint32{},
 		},
