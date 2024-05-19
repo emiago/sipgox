@@ -19,8 +19,9 @@ type RTPWriter struct {
 	// Some defaults, can be overriten only after creating writer
 	PayloadType        uint8
 	SSRC               uint32
+	SampleRate         uint32
 	ClockRateTimestamp uint32
-	ClockTicker        *time.Ticker
+	clockTicker        *time.Ticker
 	// MTU         uint32
 
 	nextTimestamp uint32
@@ -42,6 +43,7 @@ func NewRTPWriter(sess *MediaSession) *RTPWriter {
 	f := sess.Formats[0]
 	var payloadType uint8 = sdp.FormatNumeric(f)
 	var sampleRate uint32 = 8000
+	clockRate := 20 * time.Millisecond
 	switch f {
 	case sdp.FORMAT_TYPE_ALAW:
 	case sdp.FORMAT_TYPE_ULAW:
@@ -51,19 +53,28 @@ func NewRTPWriter(sess *MediaSession) *RTPWriter {
 	}
 
 	w := RTPWriter{
-		Sess:               sess,
-		seq:                rtp.NewRandomSequencer(),
-		PayloadType:        payloadType,
-		ClockRateTimestamp: uint32(sampleRate * 20 / 1000), // 20ms 0.02 * 8000 = 160
-		ClockTicker:        time.NewTicker(20 * time.Millisecond),
-		SSRC:               rand.Uint32(),
+		Sess:        sess,
+		seq:         rtp.NewRandomSequencer(),
+		PayloadType: payloadType,
+		SampleRate:  sampleRate,
+		SSRC:        rand.Uint32(),
 		// MTU:         1500,
 
 		// TODO: CSRC CSRC is contribution source identifiers.
 		// This is set when media is passed trough mixer/translators and original SSRC wants to be preserverd
 	}
 
+	w.updateClockRate(clockRate)
+
 	return &w
+}
+
+func (w *RTPWriter) updateClockRate(clockRate time.Duration) {
+	w.ClockRateTimestamp = uint32(float64(w.SampleRate) * clockRate.Seconds())
+	if w.clockTicker != nil {
+		w.clockTicker.Stop()
+	}
+	w.clockTicker = time.NewTicker(clockRate)
 }
 
 // Write implements io.Writer and does payload RTP packetization
@@ -77,7 +88,7 @@ func NewRTPWriter(sess *MediaSession) *RTPWriter {
 // - RTCP generating
 func (p *RTPWriter) Write(b []byte) (int, error) {
 	n, err := p.WriteSamples(b, p.ClockRateTimestamp, p.nextTimestamp == 0, p.PayloadType)
-	<-p.ClockTicker.C
+	<-p.clockTicker.C
 	return n, err
 }
 
