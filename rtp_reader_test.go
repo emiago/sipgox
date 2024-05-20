@@ -54,6 +54,46 @@ func TestRTPReader(t *testing.T) {
 		require.Equal(t, writePkt.SSRC, pkt.SSRC)
 		require.Equal(t, i == 0, pkt.Marker)
 		require.Equal(t, n, len(pkt.Payload))
-		require.Equal(t, rtpReader.seq.ReadExtendedSeq(), uint64(writePkt.SequenceNumber))
+		require.Equal(t, rtpReader.Seq.ReadExtendedSeq(), uint64(writePkt.SequenceNumber))
+	}
+}
+
+func BenchmarkRTPReader(b *testing.B) {
+	sess := &MediaSession{
+		Formats: sdp.Formats{
+			sdp.FORMAT_TYPE_ALAW, sdp.FORMAT_TYPE_ULAW,
+		},
+		Laddr: &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)},
+		log:   log.Logger,
+	}
+
+	dataBuf := bytes.NewBuffer([]byte{})
+	conn := &fakes.UDPConn{
+		Reader: dataBuf,
+	}
+	sess.rtpConn = conn
+
+	rtpReader := NewRTPReader(sess)
+	payload := []byte("12312313")
+	buf := make([]byte, 3200)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		writePkt := rtp.Packet{
+			Header: rtp.Header{
+				SSRC:           1234,
+				Version:        2,
+				PayloadType:    8,
+				SequenceNumber: uint16(i % (1 << 16)),
+				Timestamp:      160 * uint32(i),
+				Marker:         i == 0,
+			},
+			Payload: payload,
+		}
+		data, _ := writePkt.Marshal()
+		dataBuf.Write(data)
+
+		_, err := rtpReader.Read(buf)
+		require.NoError(b, err)
 	}
 }

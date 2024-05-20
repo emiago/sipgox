@@ -5,9 +5,21 @@ import (
 	"math/rand"
 )
 
+var (
+	// RTP spec recomned
+	maxMisorder uint16 = 100
+	maxDropout  uint16 = 3000
+	maxSeqNum   uint16 = 65535
+)
+
+var (
+	ErrRTPSequenceOutOfOrder = errors.New("out of order")
+	ErrRTPSequenceBad        = errors.New("bad sequence")
+	ErrRTPSequnceDuplicate   = errors.New("sequence duplicate")
+)
+
 // RTPExtendedSequenceNumber is embedable/ replacable sequnce number generator
 // For thread safety you should wrap it
-
 type RTPExtendedSequenceNumber struct {
 	seqNum           uint16 // highest sequence received/created
 	wrapArroundCount uint16
@@ -22,19 +34,6 @@ func NewRTPSequencer() RTPExtendedSequenceNumber {
 	sn.InitSeq(seq)
 	return sn
 }
-
-var (
-	// RTP spec recomned
-	maxMisorder uint16 = 100
-	maxDropout  uint16 = 3000
-	maxSeqNum   uint16 = 65535
-)
-
-var (
-	ErrRTPSequenceOutOfOrder = errors.New("out of order")
-	ErrRTPSequenceBad        = errors.New("bad sequence")
-	ErrRTPSequnceDuplicate   = errors.New("sequence duplicate")
-)
 
 func (sn *RTPExtendedSequenceNumber) InitSeq(seq uint16) {
 	sn.seqNum = seq
@@ -74,7 +73,8 @@ func (sn *RTPExtendedSequenceNumber) UpdateSeq(seq uint16) error {
 }
 
 func (sn *RTPExtendedSequenceNumber) ReadExtendedSeq() uint64 {
-	return uint64(sn.seqNum) + (uint64(maxSeqNum+1) * uint64(sn.wrapArroundCount))
+	res := uint64(sn.seqNum) + (uint64(maxSeqNum)+1)*uint64(sn.wrapArroundCount)
+	return res
 }
 
 func (s *RTPExtendedSequenceNumber) NextSeqNumber() uint16 {

@@ -17,6 +17,7 @@ type RTPReader struct {
 	OnRTP       func(pkt *rtp.Packet)
 	LastPacket  rtp.Packet // After calling Read this will be stored before returning
 	PayloadType uint8
+	Seq         RTPExtendedSequenceNumber
 
 	unreadPayload []byte
 	unread        int
@@ -25,7 +26,6 @@ type RTPReader struct {
 
 	// We want to track our last SSRC.
 	lastSSRC uint32
-	seq      RTPExtendedSequenceNumber
 }
 
 // RTP reader consumes samples of audio from session
@@ -48,7 +48,7 @@ func NewRTPReader(sess *MediaSession) *RTPReader {
 		OnRTP:         func(pkt *rtp.Packet) {},
 
 		pktBuffer: make(chan []byte, 100),
-		seq:       RTPExtendedSequenceNumber{},
+		Seq:       RTPExtendedSequenceNumber{},
 	}
 
 	return &w
@@ -77,16 +77,17 @@ func (r *RTPReader) Read(b []byte) (int, error) {
 
 	// If we are tracking this source, do check are we keep getting pkts in sequence
 	if r.lastSSRC == pkt.SSRC {
-		prevSeq := r.seq.ReadExtendedSeq()
-		if err := r.seq.UpdateSeq(pkt.SequenceNumber); err != nil {
+		prevSeq := r.Seq.ReadExtendedSeq()
+		if err := r.Seq.UpdateSeq(pkt.SequenceNumber); err != nil {
 			r.Sess.log.Warn().Msg(err.Error())
 		}
 
-		if prevSeq+1 != r.seq.ReadExtendedSeq() {
-			r.Sess.log.Warn().Msg("Out of order pkt received")
+		newSeq := r.Seq.ReadExtendedSeq()
+		if prevSeq+1 != newSeq {
+			r.Sess.log.Warn().Uint64("expected", prevSeq+1).Uint64("actual", newSeq).Uint16("real", pkt.SequenceNumber).Msg("Out of order pkt received")
 		}
 	} else {
-		r.seq.InitSeq(pkt.SequenceNumber)
+		r.Seq.InitSeq(pkt.SequenceNumber)
 	}
 
 	r.lastSSRC = pkt.SSRC
