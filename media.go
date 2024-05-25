@@ -341,21 +341,21 @@ func (m *MediaSession) ReadRTPRawDeadline(buf []byte, t time.Time) (int, error) 
 	return m.ReadRTPRaw(buf)
 }
 
-func (m *MediaSession) ReadRTCP() ([]rtcp.Packet, error) {
-	buf := make([]byte, 1600)
-
-	n, err := m.ReadRTCPRaw(buf)
+func (m *MediaSession) ReadRTCP(pkts []rtcp.Packet) (n int, err error) {
+	// TODO fix this
+	rawBuf := make([]byte, 1600)
+	nn, err := m.ReadRTCPRaw(rawBuf)
 	if err != nil {
-		return nil, err
+		return n, err
 	}
 
-	pkts, err := rtcp.Unmarshal(buf[:n])
+	n, err = RTCPUnmarshal(rawBuf[:nn], pkts)
 	if err != nil {
-		return nil, err
+		return 0, err
 	}
 
 	if RTCPDebug {
-		for _, p := range pkts {
+		for _, p := range pkts[:n] {
 			if s, ok := p.(fmt.Stringer); ok {
 				m.log.Debug().Msgf("RTCP read:\n%s", s.String())
 				continue
@@ -364,12 +364,12 @@ func (m *MediaSession) ReadRTCP() ([]rtcp.Packet, error) {
 				Msg("RTCP read (Unknown):\n%s")
 		}
 	}
-	return pkts, nil
+	return n, err
 }
 
-func (m *MediaSession) ReadRTCPDeadline(t time.Time) ([]rtcp.Packet, error) {
+func (m *MediaSession) ReadRTCPDeadline(pkts []rtcp.Packet, t time.Time) (n int, err error) {
 	m.rtcpConn.SetReadDeadline(t)
-	return m.ReadRTCP()
+	return m.ReadRTCP(pkts)
 }
 
 func (m *MediaSession) ReadRTCPRaw(buf []byte) (int, error) {
@@ -430,7 +430,7 @@ func (m *MediaSession) WriteRTCPDeadline(p rtcp.Packet, deadline time.Time) erro
 
 // Use this to write Multi RTCP packets if they can fit in MTU=1500
 func (m *MediaSession) WriteRTCPs(pkts []rtcp.Packet) error {
-	data, err := rtcp.Marshal(pkts)
+	data, err := RTCPMarshal(pkts)
 	if err != nil {
 		return err
 	}

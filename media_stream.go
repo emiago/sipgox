@@ -6,6 +6,7 @@ import (
 	"net"
 	"time"
 
+	"github.com/pion/rtcp"
 	"github.com/rs/zerolog"
 )
 
@@ -47,8 +48,9 @@ func MediaStreamLogger(log zerolog.Logger) MediaStreamer {
 
 		go func() {
 			log := log.With().Str("caller", "RTCP recv").Logger()
+			pkts := make([]rtcp.Packet, 5)
 			for {
-				pkts, err := s.ReadRTCP()
+				n, err := s.ReadRTCP(pkts)
 				if err != nil {
 					if errors.Is(err, net.ErrClosed) {
 						log.Info().Msg("rctp stopped")
@@ -58,7 +60,7 @@ func MediaStreamLogger(log zerolog.Logger) MediaStreamer {
 					return
 				}
 
-				for _, p := range pkts {
+				for _, p := range pkts[:n] {
 					log.Debug().Interface("data", p).
 						Msg("RTCP packet received")
 				}

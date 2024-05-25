@@ -1,9 +1,12 @@
 package sipgox
 
 import (
+	"io"
 	"net"
 	"testing"
 
+	"github.com/emiago/sipgo/fakes"
+	"github.com/pion/rtcp"
 	"github.com/stretchr/testify/require"
 )
 
@@ -58,4 +61,31 @@ func TestDTMFEncodeDecode(t *testing.T) {
 
 	encoded := DTMFEncode(event)
 	require.Equal(t, payload, encoded)
+}
+
+func TestReadRTCP(t *testing.T) {
+	session := &MediaSession{}
+	reader, writer := io.Pipe()
+	session.rtcpConn = &fakes.UDPConn{
+		Reader: reader,
+	}
+
+	go func() {
+		pkts := []rtcp.Packet{
+			&rtcp.SenderReport{},
+			&rtcp.ReceiverReport{},
+		}
+		data, err := rtcp.Marshal(pkts)
+		if err != nil {
+			return
+		}
+		writer.Write(data)
+	}()
+	pkts := make([]rtcp.Packet, 5)
+	n, err := session.ReadRTCP(pkts)
+	require.NoError(t, err)
+	require.Equal(t, 2, n)
+	require.IsType(t, &rtcp.SenderReport{}, pkts[0])
+	require.IsType(t, &rtcp.ReceiverReport{}, pkts[1])
+
 }
