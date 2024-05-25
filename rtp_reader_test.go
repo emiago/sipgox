@@ -49,11 +49,11 @@ func TestRTPReader(t *testing.T) {
 		n, err := rtpReader.Read(buf)
 		require.NoError(t, err)
 
-		pkt := rtpReader.LastPacket
+		pkt := rtpReader.PacketHeader
 		require.Equal(t, writePkt.PayloadType, pkt.PayloadType)
 		require.Equal(t, writePkt.SSRC, pkt.SSRC)
 		require.Equal(t, i == 0, pkt.Marker)
-		require.Equal(t, n, len(pkt.Payload))
+		require.Equal(t, n, len(payload))
 		require.Equal(t, rtpReader.Seq.ReadExtendedSeq(), uint64(writePkt.SequenceNumber))
 	}
 }

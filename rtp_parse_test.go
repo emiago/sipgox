@@ -10,13 +10,7 @@ import (
 )
 
 func BenchmarkRTCPUnmarshal(b *testing.B) {
-
-	session := &MediaSession{}
 	reader, writer := io.Pipe()
-	session.rtcpConn = &fakes.UDPConn{
-		Reader: reader,
-	}
-
 	go func() {
 		for {
 			sr := rtcp.SenderReport{}

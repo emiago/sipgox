@@ -14,10 +14,11 @@ import (
 type RTPReader struct {
 	Sess *MediaSession
 
-	OnRTP       func(pkt *rtp.Packet)
-	LastPacket  rtp.Packet // After calling Read this will be stored before returning
-	PayloadType uint8
-	Seq         RTPExtendedSequenceNumber
+	// PacketHeader is stored after calling Read this will be stored before returning
+	PacketHeader rtp.Header
+	OnRTP        func(pkt *rtp.Packet)
+	PayloadType  uint8
+	Seq          RTPExtendedSequenceNumber
 
 	unreadPayload []byte
 	unread        int
@@ -56,18 +57,26 @@ func NewRTPReader(sess *MediaSession) *RTPReader {
 
 // Read Implements io.Reader and extracts Payload from RTP packet
 // has no input queue or sorting control of packets
+// Buffer is used for reading headers and Headers are stored in PacketHeader
 func (r *RTPReader) Read(b []byte) (int, error) {
 	if r.unread > 0 {
 		n := r.readPayload(b, r.unreadPayload)
 		return n, nil
 	}
 
-	pkt := rtp.Packet{}
-	if err := r.Sess.readRTPNoAlloc(&pkt); err != nil {
+	// Reuse read buffer.
+	n, err := r.Sess.ReadRTPRaw(b)
+	if err != nil {
 		if errors.Is(err, net.ErrClosed) {
 			return 0, io.EOF
 		}
 
+		return 0, err
+	}
+	pkt := rtp.Packet{}
+	// NOTE: pkt after unmarshall will hold reference on b buffer.
+	// Caller should do copy of PacketHeader if it reuses buffer
+	if err := pkt.Unmarshal(b[:n]); err != nil {
 		return 0, err
 	}
 
@@ -91,7 +100,7 @@ func (r *RTPReader) Read(b []byte) (int, error) {
 	}
 
 	r.lastSSRC = pkt.SSRC
-	r.LastPacket = pkt
+	r.PacketHeader = pkt.Header
 	r.OnRTP(&pkt)
 
 	return r.readPayload(b, pkt.Payload), nil
