@@ -2,13 +2,50 @@ package sipgox
 
 import (
 	"fmt"
+	"io"
 
 	"github.com/pion/rtcp"
+	"github.com/pion/rtp"
 )
 
-// RTCPUnmarshal is improved version of pion/rtcp.Unmarshal where we allow caller to define and control
+// Experimental
+//
+// rtpUnmarshal is optimized unmarshal version based on pion/rtp
+// it does not preserve any buffer reference which allows reusage
+func rtpUnmarshal(buf []byte, p *rtp.Packet) error {
+	n, err := p.Header.Unmarshal(buf)
+	if err != nil {
+		return err
+	}
+
+	if p.Header.Extension {
+		// For now eliminate it as it holds reference on buffer
+		// TODO fix this
+		p.Header.Extensions = nil
+		p.Header.Extension = false
+	}
+
+	end := len(buf)
+	if p.Header.Padding {
+		p.PaddingSize = buf[end-1]
+		end -= int(p.PaddingSize)
+	}
+	if end < n {
+		return io.ErrShortBuffer
+	}
+
+	// Payload should be recreated instead referenced
+	// This allows buf reusage
+	p.Payload = make([]byte, len(buf[n:end]))
+	copy(p.Payload, buf[n:end])
+
+	return nil
+}
+
+// rtcpUnmarshal is improved version based on pion/rtcp where we allow caller to define and control
 // buffer of rtcp packets. This also reduces one allocation
-func RTCPUnmarshal(data []byte, packets []rtcp.Packet) (n int, err error) {
+// NOTE: data is still referenced in packet buffer
+func rtcpUnmarshal(data []byte, packets []rtcp.Packet) (n int, err error) {
 	for i := 0; i < len(packets) && len(data) != 0; i++ {
 		var h rtcp.Header
 
@@ -39,7 +76,7 @@ func RTCPUnmarshal(data []byte, packets []rtcp.Packet) (n int, err error) {
 	return n, nil
 }
 
-func RTCPMarshal(packets []rtcp.Packet) ([]byte, error) {
+func rtcpMarshal(packets []rtcp.Packet) ([]byte, error) {
 	return rtcp.Marshal(packets)
 }
 

@@ -6,6 +6,7 @@ import (
 
 	"github.com/emiago/sipgo/fakes"
 	"github.com/pion/rtcp"
+	"github.com/pion/rtp"
 )
 
 func BenchmarkRTCPUnmarshal(b *testing.B) {
@@ -53,7 +54,7 @@ func BenchmarkRTCPUnmarshal(b *testing.B) {
 			if err != nil {
 				b.Fatal(err)
 			}
-			n, err = RTCPUnmarshal(buf[:n], pkts)
+			n, err = rtcpUnmarshal(buf[:n], pkts)
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -61,5 +62,62 @@ func BenchmarkRTCPUnmarshal(b *testing.B) {
 				b.Fatal("no read RTCP")
 			}
 		}
+	})
+}
+
+func BenchmarkReadRTP(b *testing.B) {
+	session := &MediaSession{}
+	reader, writer := io.Pipe()
+	session.rtpConn = &fakes.UDPConn{
+		Reader: reader,
+	}
+
+	go func() {
+		for {
+			pkt := rtp.Packet{
+				Payload: make([]byte, 160),
+			}
+			data, err := pkt.Marshal()
+			if err != nil {
+				return
+			}
+			writer.Write(data)
+		}
+	}()
+
+	b.Run("return", func(b *testing.B) {
+		b.ResetTimer()
+		b.ReportAllocs()
+
+		b.RunParallel(func(p *testing.PB) {
+			for p.Next() {
+				pkt, err := session.ReadRTP()
+				if err != nil {
+					b.Fatal(err)
+				}
+				if len(pkt.Payload) != 160 {
+					b.Fatal("payload not parsed")
+				}
+			}
+		})
+
+	})
+
+	b.Run("pass", func(b *testing.B) {
+		b.ResetTimer()
+		b.ReportAllocs()
+
+		b.RunParallel(func(p *testing.PB) {
+			for p.Next() {
+				pkt := rtp.Packet{}
+				err := session.readRTPNoAlloc(&pkt)
+				if err != nil {
+					b.Fatal(err)
+				}
+				if len(pkt.Payload) != 160 {
+					b.Fatal("payload not parsed")
+				}
+			}
+		})
 	})
 }

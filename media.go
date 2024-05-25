@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -277,29 +278,34 @@ func (s *MediaSession) UpdateDestinationSDP(sdpReceived []byte) error {
 	return nil
 }
 
+var rtpBufPool = &sync.Pool{
+	New: func() any { return make([]byte, 1600) },
+}
+
 // readRTPNoAlloc will replace ReadRTP
 // NOTE: this function will be replaced with passing packet as buf. This helps caller to reduce memory and GC
 func (m *MediaSession) readRTPNoAlloc(pkt *rtp.Packet) error {
-	buf := make([]byte, 1600)
+	buf := rtpBufPool.Get().([]byte)
+	defer rtpBufPool.Put(buf)
 
 	n, err := m.ReadRTPRaw(buf)
 	if err != nil {
 		return err
 	}
 
-	if err := pkt.Unmarshal(buf[:n]); err != nil {
+	if err := rtpUnmarshal(buf[:n], pkt); err != nil {
 		return err
 	}
+
+	// Problem is that this buffer is refferenced in rtp PACKET
+	// if err := pkt.Unmarshal(buf[:n]); err != nil {
+	// 	return err
+	// }
 
 	if RTPDebug {
 		m.log.Debug().Msgf("Recv RTP\n%s", pkt.String())
 	}
 	return err
-}
-
-func (m *MediaSession) readRTPDeadlineNoAlloc(pkt *rtp.Packet, t time.Time) error {
-	m.rtpConn.SetReadDeadline(t)
-	return m.readRTPNoAlloc(pkt)
 }
 
 // Deprecated
@@ -349,7 +355,7 @@ func (m *MediaSession) ReadRTCP(pkts []rtcp.Packet) (n int, err error) {
 		return n, err
 	}
 
-	n, err = RTCPUnmarshal(rawBuf[:nn], pkts)
+	n, err = rtcpUnmarshal(rawBuf[:nn], pkts)
 	if err != nil {
 		return 0, err
 	}
@@ -430,7 +436,7 @@ func (m *MediaSession) WriteRTCPDeadline(p rtcp.Packet, deadline time.Time) erro
 
 // Use this to write Multi RTCP packets if they can fit in MTU=1500
 func (m *MediaSession) WriteRTCPs(pkts []rtcp.Packet) error {
-	data, err := RTCPMarshal(pkts)
+	data, err := rtcpMarshal(pkts)
 	if err != nil {
 		return err
 	}
