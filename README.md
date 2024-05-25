@@ -5,7 +5,7 @@ is experimental/extra area to add more functionality on top [sipgo lib](https://
 
 If use it in your projects consider that this repo will not have stable code until it is considered merging to `sipgo stack`
 
-If you find useful, support/sponsor [sipgo lib](https://github.com/emiago/sipgo), open issue etc...
+If you find useful, support [sipgo lib](https://github.com/emiago/sipgo), open issue etc...
 
 Here you can find [GO Documentation](https://pkg.go.dev/github.com/emiago/sipgox)
 
@@ -21,9 +21,13 @@ Features:
 - [x] Timeouts handling
 - [x] Digest auth
 - [x] DTMF encoder, decoder via RFC4733
-- [ ] Transfers on phone answer, dial
+- [x] Transfers on phone answer, dial
+- [x] Minimal SDP package for audio
+- [ ] Media Session, RTP Session handling
+- [ ] RTCP monitoring
 - [ ] SDP codec fields manipulating
-- [ ] SDP negotiation fail
+- [ ] ... who knows
+
 
 
 Checkout `echome` example to see more. 
