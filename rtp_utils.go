@@ -23,6 +23,12 @@ func NTPTimestamp(now time.Time) uint64 {
 	return uint64(currentTime)
 }
 
+func NTPToTime(ntp uint64) time.Time {
+	var ntpEpochOffset uint64 = 2208988800 // Offset from Unix epoch (January 1, 1970) to NTP epoch (January 1, 1900)
+	unixSec := ntp - ntpEpochOffset
+	return time.Unix(int64(unixSec), 0)
+}
+
 func SendDummyRTP(rtpConn *net.UDPConn, raddr net.Addr) {
 	// Create an RTP packetizer for PCMU
 	// Create an RTP packetizer
