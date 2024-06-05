@@ -7,7 +7,6 @@ import (
 
 	"github.com/emiago/sipgo"
 	"github.com/emiago/sipgo/sip"
-	"github.com/rs/zerolog/log"
 )
 
 type DialogServerSession struct {
@@ -110,27 +109,6 @@ func (d *DialogServerSession) Notify(req *sip.Request) error {
 		return d.Context().Err()
 	}
 	return nil
-}
-
-func (d *DialogServerSession) Echo() {
-	if d.InviteResponse.StatusCode != 200 {
-		return
-	}
-
-	for {
-		p, err := d.ReadRTP()
-		if err != nil {
-			log.Error().Err(err).Msg("Fail to read RTP")
-			return
-		}
-
-		log.Info().Str("payload", string(p.Payload)).Msg("Received echo")
-
-		if err := d.WriteRTP(&p); err != nil {
-			log.Error().Err(err).Msg("Fail to send RTP")
-			return
-		}
-	}
 }
 
 func (d *DialogServerSession) MediaStream(s MediaStreamer) error {

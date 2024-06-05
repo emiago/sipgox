@@ -12,9 +12,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/emiago/media/sdp"
 	"github.com/emiago/sipgo"
 	"github.com/emiago/sipgo/sip"
-	"github.com/emiago/sipgox/sdp"
 	"github.com/icholy/digest"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
