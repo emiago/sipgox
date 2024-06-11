@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"time"
 
+	"github.com/emiago/media"
 	"github.com/emiago/sipgo"
 	"github.com/emiago/sipgo/sip"
 	"github.com/emiago/sipgox"
@@ -72,6 +73,7 @@ func main() {
 	signal.Notify(sig, os.Interrupt)
 
 	go func() {
+		buf := make([]byte, media.RTPBufSize)
 		for {
 			select {
 			case <-dialog.Done():
@@ -100,7 +102,8 @@ func main() {
 				return
 			}
 
-			p, err := dialog.ReadRTP()
+			p := rtp.Packet{}
+			err := dialog.ReadRTP(buf, &p)
 			if err != nil {
 				log.Error().Err(err).Msg("Fail to read RTP")
 				return

@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/emiago/media"
 	"github.com/emiago/media/sdp"
 	"github.com/emiago/sipgo"
 	"github.com/emiago/sipgo/sip"
@@ -503,7 +504,7 @@ func (p *Phone) Dial(dialCtx context.Context, recipient sip.Uri, o DialOptions) 
 			if lip := net.ParseIP(host); lip != nil && !lip.IsUnspecified() {
 				rtpIp = lip
 			}
-			msess, err := NewMediaSession(&net.UDPAddr{IP: rtpIp, Port: 0})
+			msess, err := media.NewMediaSession(&net.UDPAddr{IP: rtpIp, Port: 0})
 			if err != nil {
 				return err
 			}
@@ -581,7 +582,7 @@ func (p *Phone) Dial(dialCtx context.Context, recipient sip.Uri, o DialOptions) 
 	if lip := net.ParseIP(host); lip != nil && !lip.IsUnspecified() {
 		rtpIp = lip
 	}
-	msess, err := NewMediaSession(&net.UDPAddr{IP: rtpIp, Port: 0})
+	msess, err := media.NewMediaSession(&net.UDPAddr{IP: rtpIp, Port: 0})
 	if err != nil {
 		return nil, err
 	}
@@ -612,7 +613,7 @@ func (p *Phone) Dial(dialCtx context.Context, recipient sip.Uri, o DialOptions) 
 	return dialog, nil
 }
 
-func (p *Phone) dial(ctx context.Context, dc *sipgo.DialogClient, invite *sip.Request, msess *MediaSession, o DialOptions) (*DialogClientSession, error) {
+func (p *Phone) dial(ctx context.Context, dc *sipgo.DialogClient, invite *sip.Request, msess *media.MediaSession, o DialOptions) (*DialogClientSession, error) {
 	log := p.getLoggerCtx(ctx, "Dial")
 	dialog, err := dc.WriteInvite(ctx, invite)
 	if err != nil {
@@ -622,7 +623,7 @@ func (p *Phone) dial(ctx context.Context, dc *sipgo.DialogClient, invite *sip.Re
 	return p.dialWaitAnswer(ctx, dialog, msess, o)
 }
 
-func (p *Phone) dialWaitAnswer(ctx context.Context, dialog *sipgo.DialogClientSession, msess *MediaSession, o DialOptions) (*DialogClientSession, error) {
+func (p *Phone) dialWaitAnswer(ctx context.Context, dialog *sipgo.DialogClientSession, msess *media.MediaSession, o DialOptions) (*DialogClientSession, error) {
 	log := p.getLoggerCtx(ctx, "Dial")
 	invite := dialog.InviteRequest
 	// Wait 200
@@ -1039,7 +1040,7 @@ func (p *Phone) answer(ansCtx context.Context, opts AnswerOptions) (*DialogServe
 				ip = lip
 			}
 
-			msess, err := NewMediaSession(&net.UDPAddr{IP: ip, Port: 0})
+			msess, err := media.NewMediaSession(&net.UDPAddr{IP: ip, Port: 0})
 			if err != nil {
 				return err
 			}

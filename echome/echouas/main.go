@@ -10,8 +10,10 @@ import (
 	"os/signal"
 	"time"
 
+	"github.com/emiago/media"
 	"github.com/emiago/sipgo"
 	"github.com/emiago/sipgox"
+	"github.com/pion/rtp"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
@@ -68,8 +70,10 @@ func main() {
 	signal.Notify(sig, os.Interrupt)
 	// Start echo
 	go func() {
+		buf := make([]byte, media.RTPBufSize)
 		for {
-			p, err := dialog.ReadRTP()
+			p := rtp.Packet{}
+			err := dialog.ReadRTP(buf, &p)
 			if err != nil {
 				if errors.Is(err, io.ErrClosedPipe) {
 					return

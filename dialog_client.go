@@ -4,12 +4,13 @@ import (
 	"context"
 	"sync"
 
+	"github.com/emiago/media"
 	"github.com/emiago/sipgo"
 	"github.com/emiago/sipgo/sip"
 )
 
 type DialogClientSession struct {
-	*MediaSession
+	*media.MediaSession
 
 	*sipgo.DialogClientSession
 
@@ -83,6 +84,6 @@ func (d *DialogClientSession) Refer(ctx context.Context, referTo sip.Uri) error 
 // 	return nil
 // }
 
-func (d *DialogClientSession) MediaStream(s MediaStreamer) error {
-	return s.MediaStream(d.MediaSession)
-}
+// func (d *DialogClientSession) MediaStream(s MediaStreamer) error {
+// 	return s.MediaStream(d.MediaSession)
+// }

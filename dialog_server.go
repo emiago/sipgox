@@ -5,12 +5,13 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/emiago/media"
 	"github.com/emiago/sipgo"
 	"github.com/emiago/sipgo/sip"
 )
 
 type DialogServerSession struct {
-	*MediaSession
+	*media.MediaSession
 
 	*sipgo.DialogServerSession
 
@@ -111,9 +112,9 @@ func (d *DialogServerSession) Notify(req *sip.Request) error {
 	return nil
 }
 
-func (d *DialogServerSession) MediaStream(s MediaStreamer) error {
-	return s.MediaStream(d.MediaSession)
-}
+// func (d *DialogServerSession) MediaStream(s MediaStreamer) error {
+// 	return s.MediaStream(d.MediaSession)
+// }
 
 func UACRequestBuild(req *sip.Request, lastReq *sip.Request, lastResp *sip.Response) {
 	from := lastReq.From()
