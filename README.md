@@ -102,7 +102,9 @@ After you Answer or Dial on phone, you receive dialog.
 
 **RTP**
 ```go
-pkt, err := dialog.ReadRTP()
+buf := make([]byte, media.RTPBufSize) // Has MTU size
+pkt := rtp.Packet{}
+err := dialog.ReadRTP(buf, &pkt)
 
 err := dialog.WriteRTP(pkt)
 
