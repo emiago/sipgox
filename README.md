@@ -1,36 +1,32 @@
 # sipgox
 
-is experimental/extra area to add more functionality on top [sipgo lib](https://github.com/emiago/sipgo), more specifically fill gap for building user agents with media.
+is experimental/extra area to add more functionality on top [sipgo lib](https://github.com/emiago/sipgo), more specifically, to fill gap for building user agents with media. This allows much more easier 
+voip testing or faster way to create UAC/UAS.
 
+To find out more read also article about [E2E testing](https://github.com/emiago/sipgo/wiki/E2E-testing) and check [GO Documentation](https://pkg.go.dev/github.com/emiago/sipgox)
 
-If use it in your projects consider that this repo will not have stable code until it is considered merging to `sipgo stack`
+**NOTE**: [Media package (github.com/emiago/media)](https://github.com/emiago/media) is now seperate repo.
 
 If you find useful, support [sipgo lib](https://github.com/emiago/sipgo), open issue etc...
 
-Here you can find [GO Documentation](https://pkg.go.dev/github.com/emiago/sipgox)
-
-Tools using this lib:
-- [gophone](https://github.com/emiago/gophone)
+Tools this lib:
+- [gophone - CLI phone](https://github.com/emiago/gophone)
 
 Features:
 - [x] Simple API for UA/phone build with dial answer register actions
-- [x] Dialog setup and small SDP with alaw and ulaw codec
+- [x] Minimal SDP package for audio
 - [x] RTP/RTCP receiving and logging
 - [x] Extendable MediaSession handling for RTP/RTCP handling (ex microphone,speaker)
 - [x] Hangup control on caller
 - [x] Timeouts handling
 - [x] Digest auth
-- [x] DTMF encoder, decoder via RFC4733
 - [x] Transfers on phone answer, dial
-- [x] Minimal SDP package for audio
-- [ ] Media Session, RTP Session handling
-- [ ] RTCP monitoring
-- [ ] SDP codec fields manipulating
+- [ ] DTMF on phone with simple API
 - [ ] ... who knows
 
 
 
-Checkout `echome` example to see more. 
+Checkout [echome](/echome/) example to see more. 
 
 
 ## Phone
