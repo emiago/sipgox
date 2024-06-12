@@ -9,7 +9,7 @@ To find out more read also article about [E2E testing](https://github.com/emiago
 
 If you find useful, support [sipgo lib](https://github.com/emiago/sipgo), open issue etc...
 
-Tools this lib:
+Tools using this lib:
 - [gophone - CLI phone](https://github.com/emiago/gophone)
 
 Features:
