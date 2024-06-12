@@ -1,13 +1,12 @@
 # sipgox
 
-is experimental/extra area to add more functionality on top [sipgo lib](https://github.com/emiago/sipgo), more specifically, to fill gap for building user agents with media. This allows much more easier 
-voip testing or faster way to create UAC/UAS.
+is experimental/extra area to add more functionality on top [sipgo lib](https://github.com/emiago/sipgo), more specifically, to fill gap for building user agents with media. This allows much more easier voip testing or faster way to create UAC/UAS.
 
-To find out more read also article about [E2E testing](https://github.com/emiago/sipgo/wiki/E2E-testing) and check [GO Documentation](https://pkg.go.dev/github.com/emiago/sipgox)
+To find out more, read also article about [E2E testing](https://github.com/emiago/sipgo/wiki/E2E-testing) and check [GO Documentation](https://pkg.go.dev/github.com/emiago/sipgox)
 
 **NOTE**: [Media package (github.com/emiago/media)](https://github.com/emiago/media) is now seperate repo.
 
-If you find useful, support [sipgo lib](https://github.com/emiago/sipgo), open issue etc...
+If you find it useful, support [sipgo lib](https://github.com/emiago/sipgo), open issue etc...
 
 Tools using this lib:
 - [gophone - CLI phone](https://github.com/emiago/gophone)
@@ -31,9 +30,11 @@ Checkout [echome](/echome/) example to see more.
 
 ## Phone
 
-Phone is wrapper that can make you to build fast phone, create/receive SIP call, handle RTP/RTCP. It uses `sipgo.Dialog` and adds **media handling** on top. 
+Phone is wrapper that allows you to build phone in couple of lines. 
+Then you can quickly create/receive SIP call, handle RTP/RTCP, etc... 
+It uses `sipgo.Dialog` and `media` package.
 
-It has specific design, and it can not be used for full softphone build.
+*NOTE*: It has specific design for testing, and it can not be used for full softphone build.
 
 ### Dialer
 
