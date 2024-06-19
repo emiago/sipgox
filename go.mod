@@ -5,7 +5,7 @@ go 1.21
 toolchain go1.21.5
 
 require (
-	github.com/emiago/media v0.1.0
+	github.com/emiago/media v0.1.1-0.20240619203804-4165fb8ba225
 	github.com/emiago/sipgo v0.22.0
 	github.com/icholy/digest v0.1.22
 	github.com/pion/rtp v1.8.6

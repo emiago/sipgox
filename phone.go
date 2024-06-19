@@ -405,6 +405,11 @@ type DialOptions struct {
 	// 1st with state NONE and dialog=nil. This is to have caller prepared
 	// 2nd with state Established or Ended with dialog
 	OnRefer func(state DialogReferState)
+
+	// Experimental
+	//
+	// OnMedia handles INVITE updates and passes new MediaSession with new propertie
+	OnMedia func(sess *media.MediaSession)
 }
 
 type DialogReferState struct {
@@ -571,6 +576,57 @@ func (p *Phone) Dial(dialCtx context.Context, recipient sip.Uri, o DialOptions) 
 		o.OnRefer(DialogReferState{State: sip.DialogStateConfirmed, Dialog: newDialog})
 	})
 
+	var dialogRef *DialogClientSession
+	// waitingAck := atomic.
+
+	server.OnInvite(func(req *sip.Request, tx sip.ServerTransaction) {
+		id, err := sip.UACReadRequestDialogID(req)
+		if err != nil {
+			tx.Respond(sip.NewResponseFromRequest(req, sip.StatusBadRequest, "Bad Request", nil))
+			return
+		}
+
+		if dialogRef.ID != id {
+			tx.Respond(sip.NewResponseFromRequest(req, sip.StatusNotFound, "Dialog does not exist", nil))
+			return
+		}
+
+		// Forking current dialog session and applying new SDP
+		msess := dialogRef.MediaSession.Fork()
+
+		if err := msess.RemoteSDP(req.Body()); err != nil {
+			tx.Respond(sip.NewResponseFromRequest(req, sip.StatusBadRequest, "SDP applying failed", nil))
+			return
+		}
+
+		log.Info().
+			Str("formats", logFormats(msess.Formats)).
+			Str("localAddr", msess.Laddr.String()).
+			Str("remoteAddr", msess.Raddr.String()).
+			Msg("Media/RTP session updated")
+
+		if o.OnMedia != nil {
+			o.OnMedia(msess)
+			tx.Respond(sip.NewResponseFromRequest(req, sip.StatusOK, "OK", nil))
+			return
+		}
+		tx.Respond(sip.NewResponseFromRequest(req, sip.StatusMethodNotAllowed, "Method not allowed", nil))
+	})
+
+	server.OnAck(func(req *sip.Request, tx sip.ServerTransaction) {
+		// This gets received when we send 200 on INVITE media update
+		id, err := sip.UACReadRequestDialogID(req)
+		if err != nil {
+			tx.Respond(sip.NewResponseFromRequest(req, sip.StatusBadRequest, "Bad Request", nil))
+			return
+		}
+
+		if dialogRef.ID != id {
+			tx.Respond(sip.NewResponseFromRequest(req, sip.StatusNotFound, "Dialog does not exist", nil))
+			return
+		}
+	})
+
 	// Start server
 	// for _, l := range listeners {
 	// 	log.Info().Str("network", l.Network).Str("addr", l.Addr).Msg("Listening on")
@@ -609,6 +665,8 @@ func (p *Phone) Dial(dialCtx context.Context, recipient sip.Uri, o DialOptions) 
 	if err != nil {
 		return nil, err
 	}
+
+	dialogRef = dialog
 
 	return dialog, nil
 }
@@ -842,8 +900,9 @@ func (p *Phone) answer(ansCtx context.Context, opts AnswerOptions) (*DialogServe
 			didAnswered, _ := sip.MakeDialogIDFromResponse(d.InviteResponse)
 			did, _ := sip.MakeDialogIDFromRequest(req)
 			if did == didAnswered {
+
 				// We received INVITE for update
-				if err := d.MediaSession.UpdateDestinationSDP(req.Body()); err != nil {
+				if err := d.MediaSession.RemoteSDP(req.Body()); err != nil {
 					res := sip.NewResponseFromRequest(req, 400, err.Error(), nil)
 					if err := tx.Respond(res); err != nil {
 						log.Error().Err(err).Msg("Fail to send 400")

@@ -4,6 +4,8 @@ github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/emiago/media v0.1.0 h1:w+TWK/lTfi2A/Jszl6eRXYF7WRY9Ac5R+Quh+Kpom2o=
 github.com/emiago/media v0.1.0/go.mod h1:ZR7F8OydXIBOSFXQwxkMs56fJD3I/KpN/Z+ZOhyaIiY=
+github.com/emiago/media v0.1.1-0.20240619203804-4165fb8ba225 h1:4oRmN/GPAx9UUw1EDbk3xNR4Z73WLDpsdf0AJ5RvGGY=
+github.com/emiago/media v0.1.1-0.20240619203804-4165fb8ba225/go.mod h1:phTj1EGDttAaMyKVvR/NG2CTdUVnbIDm5QzdH4nZUsU=
 github.com/emiago/sipgo v0.22.0 h1:GaQ51m26M9QnVBVY2aDJ/mXqq/BDfZ1A+nW7XgU/4Ts=
 github.com/emiago/sipgo v0.22.0/go.mod h1:a77FgPEEjJvfYWYfP3p53u+dNhWEMb/VGVS6guvBzx0=
 github.com/gobwas/httphead v0.1.0 h1:exrUm0f4YX0L7EBwZHuCF4GDp8aJfVeBrlLQrs6NqWU=
