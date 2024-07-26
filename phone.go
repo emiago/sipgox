@@ -363,7 +363,7 @@ func (p *Phone) register(ctx context.Context, client *sipgo.Client, recipient si
 		}
 	}
 
-	err := t.Register(ctx, recipient)
+	err := t.Register(ctx)
 	if err != nil {
 		return nil, err
 	}

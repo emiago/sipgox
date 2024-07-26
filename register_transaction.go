@@ -47,7 +47,7 @@ func NewRegisterTransaction(log zerolog.Logger, client *sipgo.Client, recipient 
 	return t
 }
 
-func (p *RegisterTransaction) Register(ctx context.Context, recipient sip.Uri) error {
+func (p *RegisterTransaction) Register(ctx context.Context) error {
 	username, password, expiry := p.opts.Username, p.opts.Password, p.opts.Expiry
 	client := p.client
 	log := p.log
