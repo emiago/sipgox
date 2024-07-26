@@ -687,11 +687,12 @@ func (p *Phone) dialWaitAnswer(ctx context.Context, dialog *sipgo.DialogClientSe
 	// Wait 200
 	waitStart := time.Now()
 	err := dialog.WaitAnswer(ctx, sipgo.AnswerOptions{
-		OnResponse: func(res *sip.Response) {
+		OnResponse: func(res *sip.Response) error {
 			p.logSipResponse(&log, res)
 			if o.OnResponse != nil {
 				o.OnResponse(res)
 			}
+			return nil
 		},
 		Username: o.Username,
 		Password: o.Password,
