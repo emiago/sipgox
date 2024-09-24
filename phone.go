@@ -919,7 +919,12 @@ func (p *Phone) answer(ansCtx context.Context, opts AnswerOptions) (*DialogServe
 				}
 				return
 			}
-			log.Error().Msg("Received second INVITE is not yet supported")
+			log.Error().Msg("Received second INVITE is not yet supported: 486 busy here")
+			res := sip.NewResponseFromRequest(req, 486, "busy here", nil)
+			if err := tx.Respond(res); err != nil {
+				log.Error().Err(err).Msg("Fail to send 486")
+				return
+			}
 			return
 		}
 
